@@ -1,3 +1,4 @@
+
 export enum UserRole {
   STUDENT = 'student',
   TEACHER = 'teacher',
@@ -36,5 +37,8 @@ export interface Comment {
   createdAt: string;
   essayId: string;
   authorName: string;
+  authorGrade: number;
+  authorClass: number;
+  authorNumber: number;
   content: string;
 }

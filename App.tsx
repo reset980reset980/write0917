@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { TEACHER_PASSWORD } from './constants';
 import { UserRole, type Student, type Essay, type EssayData, type BodyPart, type Comment } from './types';
 import { getTopicSuggestions } from './services/geminiService';
-import { getAllEssays, addEssay, findEssayByEditCode, updateEssay, deleteEssay, incrementLike, decrementLike, getComments, addComment } from './services/supabaseService';
+import { isSupabaseConfigured, getAllEssays, addEssay, deleteEssay, incrementLike, getComments, addComment, findEssayByEditCode, updateEssay } from './services/supabaseService';
 import {
   UserIcon, TeacherIcon, SparklesIcon, PlusIcon, TrashIcon,
   ChevronRightIcon, ChevronLeftIcon, CheckCircleIcon, ArrowLeftIcon, HeartIcon, ChatBubbleIcon, XIcon
@@ -11,7 +11,53 @@ import {
 import LoadingSpinner from './components/LoadingSpinner';
 import EssayCard from './components/EssayCard';
 
-// ---------- SUB-COMPONENTS (Defined outside App to prevent re-creation on re-renders) ----------
+
+// ---------- HELPERS / SMALLER COMPONENTS ----------
+
+const Linkify: React.FC<{ text: string }> = ({ text }) => {
+    // A simple regex to find URLs.
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+
+    return (
+        <>
+            {parts.map((part, i) =>
+                urlRegex.test(part) ? (
+                    <a href={part} key={i} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline break-all">{part}</a>
+                ) : (
+                    <React.Fragment key={i}>{part}</React.Fragment>
+                )
+            )}
+        </>
+    );
+};
+
+
+// ---------- VIEWS / MAJOR COMPONENTS ----------
+
+const SupabaseSetupNeeded: React.FC = () => (
+    <div className="flex items-center justify-center min-h-screen bg-gray-100 p-4">
+        <div className="w-full max-w-2xl p-8 space-y-6 bg-white rounded-xl shadow-lg border-2 border-red-200">
+            <h2 className="text-3xl font-bold text-center text-red-700">🚨 Supabase 설정이 필요합니다 🚨</h2>
+            <p className="text-center text-gray-700">
+                애플리케이션이 데이터베이스에 연결할 수 없습니다. 계속하려면 Supabase 프로젝트를 설정하고
+                API 키를 입력해야 합니다.
+            </p>
+            <div className="space-y-4 text-left p-6 bg-gray-50 rounded-lg">
+                <h3 className="font-semibold text-lg text-gray-800">설정 방법:</h3>
+                <ol className="list-decimal list-inside space-y-2 text-gray-600">
+                    <li><a href="https://supabase.com/" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline font-semibold">Supabase</a>에 가입하고 새 프로젝트를 만드세요.</li>
+                    <li>프로젝트 대시보드에서 <strong>SQL Editor</strong>로 이동하여 <code>supabase_setup.md</code> 파일의 SQL 코드를 실행하세요.</li>
+                    <li>프로젝트 대시보드의 <strong>Project Settings &gt; API</strong>에서 <strong>Project URL</strong>과 <strong>Project API Keys</strong>의 <code>anon</code> <code>public</code> 키를 복사하세요.</li>
+                    <li><code>constants.ts</code> 파일을 열고 복사한 URL과 키를 <code>SUPABASE_URL</code>과 <code>SUPABASE_ANON_KEY</code> 변수에 붙여넣으세요.</li>
+                </ol>
+            </div>
+            <p className="text-center text-sm text-gray-500 pt-4">
+                설정을 완료한 후 페이지를 새로고침 해주세요.
+            </p>
+        </div>
+    </div>
+);
 
 const LandingPage: React.FC<{ onSelectRole: (role: UserRole) => void }> = ({ onSelectRole }) => (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-indigo-50 to-white p-4">
@@ -136,17 +182,28 @@ const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ 
     );
 };
 
+interface WritingWizardProps {
+    student: Student;
+    onBackToGallery: () => void;
+    onComplete?: (essay: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => void;
+    initialData?: Essay | null;
+    onUpdate?: (updates: EssayData) => void;
+}
 
-const WritingWizard: React.FC<{ student: Student; onComplete: (essay: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => void; onBackToGallery: () => void; }> = ({ student, onComplete, onBackToGallery }) => {
+const WritingWizard: React.FC<WritingWizardProps> = (props) => {
+    const { student, onBackToGallery, onComplete, initialData, onUpdate } = props;
+    const isEditMode = !!initialData;
+    
+    const MIN_LEN = 100;
     const [step, setStep] = useState(1);
-    const [topic, setTopic] = useState('');
-    const [refinedTopic, setRefinedTopic] = useState('');
+    const [topic, setTopic] = useState(initialData?.topic || '');
+    const [refinedTopic, setRefinedTopic] = useState(initialData?.topic || '');
     const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
-    const [introduction, setIntroduction] = useState('');
-    const [body, setBody] = useState<BodyPart[]>([{ reason: '', source: '' }]);
-    const [conclusion, setConclusion] = useState('');
+    const [introduction, setIntroduction] = useState(initialData?.introduction || '');
+    const [body, setBody] = useState<BodyPart[]>(initialData?.body || [{ reason: '', source: '' }]);
+    const [conclusion, setConclusion] = useState(initialData?.conclusion || '');
     const [isRefining, setIsRefining] = useState(false);
-    const [finalFullText, setFinalFullText] = useState('');
+    const [finalFullText, setFinalFullText] = useState(initialData?.fullText || '');
 
     const handleRefineTopic = async () => {
         if (!topic.trim()) {
@@ -166,7 +223,7 @@ const WritingWizard: React.FC<{ student: Student; onComplete: (essay: Omit<Essay
     
     const updateBodyPart = (index: number, field: 'reason' | 'source', value: string) => {
         const newBody = [...body];
-        newBody[index] = { ...newBody[index], [field]: value };
+        newBody[index][field] = value;
         setBody(newBody);
     };
 
@@ -180,351 +237,560 @@ const WritingWizard: React.FC<{ student: Student; onComplete: (essay: Omit<Essay
 
     const finalTopic = refinedTopic || topic;
 
-    useEffect(() => {
-        if (step === 3) {
-            const bodyText = body.map(part => part.reason).join('\n\n');
-            const initialFullText = `${introduction}\n\n${bodyText}\n\n${conclusion}`;
-            setFinalFullText(initialFullText);
-        }
-    }, [step, introduction, body, conclusion]);
-
-    const validations = {
-        step1: finalTopic.trim().length > 0,
-        step2: introduction.length >= 100 && body.every(b => b.reason.trim().length > 0 && b.source.trim().length > 0) && conclusion.length >= 100,
-        step3: finalFullText.length >= 500,
-    };
-
-    const handleComplete = () => {
-        if (!validations.step3) {
-            alert(`글자 수가 부족합니다. (현재 ${finalFullText.length}자 / 500자 이상)`);
-            return;
-        }
-        const editCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-        
-        const firstParagraph = finalFullText.split('\n\n')[0] || '';
-
-        onComplete({
-            student,
-            topic: finalTopic,
-            introduction: firstParagraph,
-            body, 
-            conclusion,
-            fullText: finalFullText,
-            editCode,
-        });
-    };
+    const generateFullText = useCallback(() => {
+        const bodyText = body.map(part => part.reason).join('\n\n');
+        return `${introduction}\n\n${bodyText}\n\n${conclusion}`;
+    }, [introduction, body, conclusion]);
     
-    const ProgressBar = () => (
-        <div className="w-full bg-gray-200 rounded-full h-2.5 mb-8">
-            <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${(step / 3) * 100}%` }}></div>
-        </div>
-    );
+    const validations = useMemo(() => ({
+        step1: finalTopic.trim().length > 0,
+        step2: introduction.trim().length >= MIN_LEN && 
+               body.every(b => b.reason.trim().length > 0 && b.source.trim().length > 0) &&
+               conclusion.trim().length >= MIN_LEN,
+        step3: finalFullText.trim().length > 0,
+    }), [finalTopic, introduction, body, conclusion, finalFullText]);
+    
+    const handleFinalSubmit = () => {
+        if (!validations.step3) {
+             alert(`글의 최종 내용을 확인하고 수정해주세요.`);
+             return;
+        }
+        
+        const essayData: EssayData = {
+            topic: finalTopic,
+            introduction,
+            body,
+            conclusion,
+            fullText: finalFullText.trim(),
+        };
 
-    return (
-        <div className="max-w-4xl mx-auto p-4 md:p-8">
-             <div className="flex justify-between items-center mb-4">
-                <h1 className="text-3xl font-bold text-gray-800">주장하는 글쓰기</h1>
-                <button onClick={onBackToGallery} className="text-sm text-indigo-600 hover:underline">갤러리로 가기</button>
-            </div>
-            <ProgressBar />
-            <div className="bg-white p-8 rounded-xl shadow-lg">
-                {/* Step 1: Topic */}
-                {step === 1 && (
+        if (isEditMode && onUpdate) {
+            onUpdate(essayData);
+        } else if (onComplete) {
+            const editCode = Math.random().toString(36).substring(2, 8);
+            onComplete({
+                ...essayData,
+                student,
+                editCode,
+            });
+        }
+    };
+
+    const goToNextStep = () => {
+        if (step === 1 && !validations.step1) return;
+        if (step === 2) {
+            if (!validations.step2) {
+                alert(`서론과 결론은 각각 ${MIN_LEN}자 이상, 본론의 모든 근거와 출처를 입력해야 합니다.`);
+                return;
+            }
+            // Always regenerate full text when moving from step 2 to 3
+            setFinalFullText(generateFullText());
+        }
+        setStep(s => s + 1);
+    };
+
+    const renderStep = () => {
+        switch (step) {
+            case 1:
+                return (
                     <div>
-                        <h2 className="text-2xl font-semibold text-gray-700 mb-1">1단계: 주제 정하기</h2>
-                        <p className="text-gray-500 mb-6">어떤 내용으로 글을 쓰고 싶은지 주제를 정해 보세요.</p>
-                        <div className="space-y-4">
-                            <textarea
+                        <label htmlFor="topic" className="block text-sm font-medium text-gray-700 mb-2">
+                            어떤 주장에 대해 글을 쓰고 싶나요? 주제를 자유롭게 적어보세요.
+                        </label>
+                        <div className="flex gap-2">
+                            <input
+                                id="topic"
+                                type="text"
                                 value={topic}
                                 onChange={(e) => setTopic(e.target.value)}
-                                placeholder="예시) 초등학생의 스마트폰 사용을 줄여야 한다."
-                                className="w-full p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 transition"
-                                rows={3}
+                                placeholder="예: 초등학생의 스마트폰 사용을 금지해야 한다"
+                                className="flex-grow block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                             />
-                            <button onClick={handleRefineTopic} disabled={isRefining} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300">
+                            <button
+                                onClick={handleRefineTopic}
+                                disabled={isRefining}
+                                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300"
+                            >
                                 {isRefining ? <LoadingSpinner /> : <SparklesIcon />}
-                                AI로 주제 다듬기
+                                <span className="ml-2">AI 추천</span>
                             </button>
-                            {refinedTopic && (
-                                <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-md space-y-4">
-                                    <div>
-                                        <h3 className="font-semibold text-indigo-800 mb-2">AI 추천 주제 (수정 가능) ✨</h3>
-                                        <textarea
-                                            value={refinedTopic}
-                                            onChange={(e) => setRefinedTopic(e.target.value)}
-                                            className="w-full p-2 bg-white border border-indigo-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                                            rows={2}
-                                        />
-                                    </div>
-                                    {topicSuggestions.length > 0 && (
-                                     <div>
-                                        <h4 className="font-semibold text-gray-700 mb-2">다른 주제 제안</h4>
-                                        <div className="flex flex-col sm:flex-row gap-2">
-                                            {topicSuggestions.map((suggestion, index) => (
-                                                <button 
-                                                    key={index}
-                                                    onClick={() => setRefinedTopic(suggestion)}
-                                                    className="flex-1 text-left p-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-100 hover:border-indigo-400 transition"
-                                                >
-                                                    {suggestion}
-                                                </button>
-                                            ))}
-                                        </div>
-                                     </div>
-                                    )}
+                        </div>
+                        
+                        {isRefining && <p className="text-sm text-gray-500 mt-4">AI가 더 좋은 주제를 찾고 있어요. 잠시만 기다려주세요...</p>}
+                        
+                        {refinedTopic && (
+                            <div className="mt-6 bg-indigo-50 p-4 rounded-lg">
+                                <h3 className="font-semibold text-gray-800 mb-3">AI가 추천하는 주제예요!</h3>
+                                <div className="space-y-2">
+                                    <button onClick={() => { setRefinedTopic(refinedTopic); setTopic(refinedTopic); }} className="w-full text-left p-3 bg-white rounded-md shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <p className="font-bold text-indigo-700">{refinedTopic}</p>
+                                        <p className="text-xs text-gray-500">(원래 주제를 다듬었어요)</p>
+                                    </button>
+                                    {topicSuggestions.map((s, i) => (
+                                        <button key={i} onClick={() => { setRefinedTopic(s); setTopic(s); }} className="w-full text-left p-3 bg-white rounded-md shadow-sm hover:bg-indigo-100 transition-colors">
+                                            {s}
+                                        </button>
+                                    ))}
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        )}
                     </div>
-                )}
-
-                {/* Step 2: Structure */}
-                {step === 2 && (
-                    <div>
-                        <h2 className="text-2xl font-semibold text-gray-700 mb-1">2단계: 글의 뼈대 세우기</h2>
-                        <p className="text-gray-500 mb-6">서론, 본론, 결론에 들어갈 내용을 작성해 보세요.</p>
-                        <div className="space-y-6">
-                            <div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">서론 <span className="text-sm font-normal text-gray-500">(주장 펼치기)</span></h3>
-                                <textarea value={introduction} onChange={e => setIntroduction(e.target.value)} placeholder="글을 쓰게 된 문제 상황과 자신의 주장을 명확하게 밝혀주세요." className="w-full p-3 border border-gray-300 rounded-md" rows={4} />
-                                <p className={`text-right text-sm mt-1 ${introduction.length < 100 ? 'text-red-500' : 'text-green-600'}`}>{introduction.length} / 100자 이상</p>
+                );
+            case 2:
+                return (
+                    <div className="space-y-6">
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <h3 className="text-lg font-semibold text-gray-800">서론</h3>
+                                <span className={`text-sm ${introduction.length < MIN_LEN ? 'text-red-500' : 'text-gray-500'}`}>{introduction.length} / {MIN_LEN}자 이상</span>
                             </div>
-                            <div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">본론 <span className="text-sm font-normal text-gray-500">(근거 제시하기)</span></h3>
-                                {body.map((part, index) => (
-                                    <div key={index} className="relative mb-4 p-4 border rounded-lg bg-gray-50">
-                                        <textarea value={part.reason} onChange={e => updateBodyPart(index, 'reason', e.target.value)} placeholder={`근거 ${index + 1}: 주장을 뒷받침하는 이유와 구체적인 예시를 들어 설명해주세요.`} className={`w-full p-3 border rounded-md transition-colors ${part.reason.trim().length > 0 ? 'border-gray-300' : 'border-red-400'}`} rows={3} />
-                                        <div className="mt-2">
-                                            <label htmlFor={`source-${index}`} className="block text-sm font-medium text-gray-600 mb-1">출처 (필수)</label>
-                                            <input type="text" id={`source-${index}`} value={part.source} onChange={e => updateBodyPart(index, 'source', e.target.value)} placeholder="예: https://www.example.com 또는 '네이버 지식백과'" className={`w-full p-2 border rounded-md text-sm transition-colors ${part.source.trim().length > 0 ? 'border-gray-300' : 'border-red-400'}`} />
-                                        </div>
-                                        {body.length > 1 && (
-                                            <button onClick={() => removeReason(index)} className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-500"><TrashIcon /></button>
-                                        )}
-                                    </div>
-                                ))}
-                                <button onClick={addReason} className="flex items-center gap-2 text-sm px-3 py-1.5 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"><PlusIcon /> 근거 추가하기</button>
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-2">결론 <span className="text-sm font-normal text-gray-500">(주장 다지기)</span></h3>
-                                <textarea value={conclusion} onChange={e => setConclusion(e.target.value)} placeholder="본론의 내용을 요약하고, 자신의 주장을 다시 한번 강조하며 마무리해주세요." className="w-full p-3 border border-gray-300 rounded-md" rows={4} />
-                                <p className={`text-right text-sm mt-1 ${conclusion.length < 100 ? 'text-red-500' : 'text-green-600'}`}>{conclusion.length} / 100자 이상</p>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Step 3: Finalize */}
-                {step === 3 && (
-                    <div>
-                        <h2 className="text-2xl font-semibold text-gray-700 mb-1">3단계: 글 완성하기</h2>
-                        <p className="text-gray-500 mb-6">지금까지 작성한 내용을 하나의 글로 합쳤어요. 내용을 다듬어 완성해 보세요.</p>
-                        <div className="p-4 border rounded-md bg-gray-50 space-y-4">
-                            <h3 className="text-xl font-bold text-center text-gray-800">{finalTopic}</h3>
                             <textarea
-                                value={finalFullText}
-                                onChange={(e) => setFinalFullText(e.target.value)}
-                                className="w-full p-3 border border-gray-300 rounded-md min-h-[300px]"
+                                value={introduction}
+                                onChange={(e) => setIntroduction(e.target.value)}
+                                placeholder="글을 쓰게 된 이유, 문제 상황, 그리고 나의 주장을 명확하게 밝혀주세요."
+                                className="w-full h-32 p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                             />
-                            <p className={`text-right text-sm mt-1 ${finalFullText.length < 500 ? 'text-red-500' : 'text-green-600'}`}>{finalFullText.length} / 500자 이상</p>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-semibold text-gray-800 mb-2">본론</h3>
+                            {body.map((part, index) => (
+                                <div key={index} className="bg-gray-50 p-4 rounded-lg mb-4 relative">
+                                    {body.length > 1 && (
+                                        <button onClick={() => removeReason(index)} className="absolute top-2 right-2 p-1 text-gray-400 hover:text-red-600">
+                                            <TrashIcon className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                    <textarea
+                                        value={part.reason}
+                                        onChange={(e) => updateBodyPart(index, 'reason', e.target.value)}
+                                        placeholder={`주장을 뒷받침하는 근거 #${index + 1}을 작성해주세요.`}
+                                        className="w-full h-24 p-2 mb-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={part.source}
+                                        onChange={(e) => updateBodyPart(index, 'source', e.target.value)}
+                                        placeholder="근거의 출처 (예: 뉴스 기사, 책, 내 경험 등)"
+                                        className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                    />
+                                </div>
+                            ))}
+                            <button onClick={addReason} className="mt-2 inline-flex items-center px-3 py-1.5 border border-dashed border-gray-400 text-sm font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
+                                <PlusIcon className="w-4 h-4 mr-2" /> 근거 추가하기
+                            </button>
+                        </div>
+                        <div>
+                           <div className="flex justify-between items-center mb-2">
+                                <h3 className="text-lg font-semibold text-gray-800">결론</h3>
+                                <span className={`text-sm ${conclusion.length < MIN_LEN ? 'text-red-500' : 'text-gray-500'}`}>{conclusion.length} / {MIN_LEN}자 이상</span>
+                            </div>
+                            <textarea
+                                value={conclusion}
+                                onChange={(e) => setConclusion(e.target.value)}
+                                placeholder="지금까지의 내용을 요약하고, 주장을 다시 한번 강조하며 글을 마무리해주세요."
+                                className="w-full h-32 p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                            />
                         </div>
                     </div>
-                )}
+                );
+            case 3:
+                return (
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-800 mb-2">글을 마지막으로 확인해주세요</h3>
+                        <p className="text-sm text-gray-600 mb-4">
+                            아래 상자에서 글의 전체 내용을 확인하고, 오타나 어색한 문장이 있다면 자유롭게 수정할 수 있어요.
+                            모두 확인했다면 '{isEditMode ? '수정 완료' : '완성'}' 버튼을 눌러주세요.
+                        </p>
+                        <div className="p-4 bg-white border border-gray-200 rounded-md mb-4">
+                            <h4 className="font-bold text-indigo-700 text-xl mb-3">{finalTopic}</h4>
+                            <p className="text-sm text-gray-500 mb-4">
+                              {student.grade}학년 {student.classNumber}반 {student.studentId}번 {student.name}
+                            </p>
+                        </div>
+                        <textarea
+                            value={finalFullText}
+                            onChange={(e) => setFinalFullText(e.target.value)}
+                            className="w-full h-80 p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                            aria-label="최종 글 내용"
+                        />
+                        <div className="mt-4">
+                            <h4 className="font-semibold text-gray-800 mb-2">출처 목록</h4>
+                            <ul className="list-disc list-inside bg-gray-50 p-3 rounded-md text-sm text-gray-700 space-y-1">
+                                {body.filter(p => p.source.trim()).map((part, index) => (
+                                    <li key={index}><Linkify text={part.source} /></li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                );
+             default:
+                return null;
+        }
+    };
 
-                {/* Navigation */}
-                <div className="mt-8 flex justify-between items-center">
-                    <button
-                        onClick={() => setStep(s => s > 1 ? s - 1 : 1)}
-                        disabled={step === 1}
-                        className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50"
-                    >
-                        <ChevronLeftIcon /> 이전
-                    </button>
-                    {step < 3 && (
-                         <button
-                            onClick={() => setStep(s => s < 3 ? s + 1 : 3)}
-                            disabled={
-                                (step === 1 && !validations.step1) ||
-                                (step === 2 && !validations.step2)
-                            }
-                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300"
-                        >
-                            다음 <ChevronRightIcon />
-                        </button>
-                    )}
-                    {step === 3 && (
+    return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+            <div className="max-w-4xl w-full mx-auto">
+                <div className="bg-white rounded-xl shadow-lg p-8">
+                    <div className="flex justify-between items-start mb-6 border-b pb-4">
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">
+                              {step === 1 && '1단계: 주제 정하기'}
+                              {step === 2 && '2단계: 내용 작성하기'}
+                              {step === 3 && `3단계: ${isEditMode ? '수정하고 제출하기' : '완성하고 제출하기'}`}
+                            </h2>
+                            <p className="text-gray-500 mt-1 truncate max-w-md">{finalTopic || '아직 주제가 정해지지 않았어요.'}</p>
+                        </div>
+                        <button onClick={onBackToGallery} className="text-sm text-gray-500 hover:text-gray-800 flex-shrink-0 ml-4">갤러리로 돌아가기</button>
+                    </div>
+                    
+                    <div className="min-h-[500px]">
+                        {renderStep()}
+                    </div>
+
+                    <div className="mt-8 pt-6 border-t flex justify-between items-center">
                         <button
-                            onClick={handleComplete}
-                            disabled={!validations.step3}
-                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-green-300"
+                            onClick={() => setStep(s => s - 1)}
+                            disabled={step === 1}
+                            className="flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            <CheckCircleIcon /> 완성하고 제출하기
+                            <ChevronLeftIcon className="w-5 h-5 mr-2" />
+                            이전
                         </button>
-                    )}
+                        {step < 3 ? (
+                            <button
+                                onClick={goToNextStep}
+                                disabled={ (step === 1 && !validations.step1) }
+                                className="flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300"
+                            >
+                                다음
+                                <ChevronRightIcon className="w-5 h-5 ml-2" />
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleFinalSubmit}
+                                disabled={!validations.step3}
+                                className="flex items-center px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:bg-teal-300"
+                            >
+                                <CheckCircleIcon className="w-5 h-5 mr-2" />
+                                {isEditMode ? '수정 완료!' : '완성!'}
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
     );
 };
 
-const EssayGallery: React.FC<{
-  essays: Essay[];
-  onStartWriting: () => void;
-  onSelectEssay: (essay: Essay) => void;
-  isLoading: boolean;
-  isAdmin: boolean;
-  onBackToLanding: () => void;
-  dbError: string | null;
-  onEditRequest: () => void;
-  onDeleteEssay?: (id: string) => void;
-  likedEssayIds: string[];
-}> = ({ essays, onStartWriting, onSelectEssay, isLoading, isAdmin, onBackToLanding, dbError, onEditRequest, onDeleteEssay, likedEssayIds }) => (
-    <div className="max-w-7xl mx-auto p-4 md:p-8">
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-4">
-            <div className="flex items-center gap-4">
-              <button onClick={onBackToLanding} className="p-2 rounded-full hover:bg-gray-100">
-                  <ArrowLeftIcon className="w-6 h-6 text-gray-600" />
-              </button>
-              <h1 className="text-3xl font-bold text-gray-800">{isAdmin ? "학생 글 관리" : "주장 갤러리"}</h1>
+
+const GalleryView: React.FC<{
+    essays: Essay[];
+    onSelectEssay: (essay: Essay) => void;
+    onNewEssay: () => void;
+    onModifyEssay: () => void;
+    onDeleteEssay: (id: string) => Promise<void>;
+    isAdmin: boolean;
+    likedEssayIds: Set<string>;
+    onGoHome: () => void;
+}> = ({ essays, onSelectEssay, onNewEssay, onModifyEssay, onDeleteEssay, isAdmin, likedEssayIds, onGoHome }) => (
+    <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
+            <div>
+                <h1 className="text-3xl font-bold text-gray-900">우리들의 글 솜씨 뽐내기</h1>
+                <p className="mt-1 text-gray-600">친구들의 글을 읽고, 응원의 '좋아요'와 댓글을 남겨주세요!</p>
             </div>
-            {!isAdmin && (
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                    <button
-                        onClick={onEditRequest}
-                        className="w-full sm:w-auto px-6 py-3 bg-white text-indigo-700 font-semibold rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors duration-300"
-                    >
-                        글 수정하기
-                    </button>
-                    <button
-                        onClick={onStartWriting}
-                        className="w-full sm:w-auto px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition-colors duration-300"
-                    >
-                        새 글쓰기 시작하기
-                    </button>
-                </div>
-            )}
+            <div className="flex items-center gap-2 mt-4 sm:mt-0 flex-shrink-0">
+                <button
+                    onClick={onGoHome}
+                    className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50"
+                >
+                    처음으로
+                </button>
+                <button
+                    onClick={onModifyEssay}
+                    className="inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50"
+                >
+                    글 수정하기
+                </button>
+                <button
+                    onClick={onNewEssay}
+                    className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                    새 글 작성하기
+                </button>
+            </div>
+        </header>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {essays.map(essay => (
+                <EssayCard
+                    key={essay.id}
+                    essay={essay}
+                    onSelect={() => onSelectEssay(essay)}
+                    isAdmin={isAdmin}
+                    onDelete={onDeleteEssay}
+                    isLiked={likedEssayIds.has(essay.id)}
+                />
+            ))}
         </div>
-        {isLoading ? (
-            <div className="flex justify-center items-center h-64">
-                <LoadingSpinner size="w-12 h-12" />
-            </div>
-        ) : dbError ? (
-            <div className="text-center py-16 px-4 bg-white rounded-lg shadow border border-red-200">
-                <h3 className="text-xl font-semibold text-red-700">오류가 발생했습니다</h3>
-                <p className="text-gray-600 mt-2 bg-red-50 p-3 rounded-md">{dbError}</p>
-                <p className="text-gray-500 mt-4 text-sm">
-                    이 문제가 계속되면 관리자에게 문의하거나, 제공된 <code>supabase_setup.md</code> 파일의 쿼리를 실행하여 'essays' 테이블이 올바르게 생성되었는지 확인해주세요.
-                </p>
-            </div>
-        ) : essays.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {essays.map(essay => (
-                    <EssayCard key={essay.id} essay={essay} onSelect={() => onSelectEssay(essay)} isAdmin={isAdmin} onDelete={onDeleteEssay} isLiked={likedEssayIds.includes(essay.id)} />
-                ))}
-            </div>
-        ) : (
-            <div className="text-center py-16 px-4 bg-white rounded-lg shadow">
-                <h3 className="text-xl font-semibold text-gray-700">아직 등록된 글이 없어요.</h3>
-                <p className="text-gray-500 mt-2">{isAdmin ? "학생들이 글을 제출하면 이곳에서 확인할 수 있습니다." : "첫 번째 글을 작성해 보세요!"}</p>
+        {essays.length === 0 && (
+            <div className="text-center py-12 bg-white rounded-lg shadow-md">
+                <h3 className="text-xl font-semibold text-gray-800">아직 등록된 글이 없어요.</h3>
+                <p className="mt-2 text-gray-500">첫 번째 글을 작성해서 갤러리를 채워보세요!</p>
             </div>
         )}
     </div>
 );
 
-const SubmissionSuccessPage: React.FC<{ editCode: string; onGoToGallery: () => void; }> = ({ editCode, onGoToGallery }) => {
-  const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(editCode).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
+const WritingSuccessView: React.FC<{ essay: Essay; onFinish: () => void; }> = ({ essay, onFinish }) => {
+    const [isCopied, setIsCopied] = useState(false);
+    
+    const handleCopy = () => {
+        navigator.clipboard.writeText(essay.editCode).then(() => {
+            setIsCopied(true);
+            setTimeout(() => setIsCopied(false), 2000);
         });
-    } else {
-        alert("클립보드 복사를 지원하지 않는 환경입니다. 코드를 직접 복사해주세요.");
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-indigo-50 p-4">
-      <div className="w-full max-w-lg p-8 text-center bg-white rounded-xl shadow-2xl border-t-4 border-green-500">
-        <CheckCircleIcon className="w-20 h-20 text-green-500 mx-auto mb-4" />
-        <h2 className="text-3xl font-bold text-gray-800 mb-2">제출 완료!</h2>
-        <p className="text-gray-600 mb-6">글이 성공적으로 갤러리에 등록되었습니다.</p>
-
-        <div className="mb-8">
-          <p className="text-sm text-gray-500 mb-2">나중에 글을 수정하려면 아래 코드가 필요해요. 꼭! 보관해주세요.</p>
-          <div className="flex items-center justify-center p-4 bg-indigo-50 rounded-lg border-2 border-dashed border-indigo-200">
-            <span className="text-3xl font-mono tracking-widest text-indigo-700">{editCode}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-4">
-          <button
-            onClick={handleCopy}
-            className={`w-full flex items-center justify-center gap-2 py-3 px-4 border rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-300 ${
-              copied
-                ? 'bg-green-100 text-green-800 border-green-300'
-                : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'
-            }`}
-          >
-            {copied ? '복사 완료!' : '수정 코드 복사하기'}
-          </button>
-          <button
-            onClick={onGoToGallery}
-            className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-          >
-            갤러리로 이동
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const EditCodeEntry: React.FC<{ onFind: (code: string) => void; onBack: () => void; isFinding: boolean; }> = ({ onFind, onBack, isFinding }) => {
-    const [code, setCode] = useState('');
-    const [error, setError] = useState('');
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        const trimmedCode = code.trim().toUpperCase();
-        if (trimmedCode.length === 6) {
-            onFind(trimmedCode);
-        } else {
-            setError('수정 코드는 6자리여야 합니다.');
-        }
     };
 
     return (
         <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
-            <div className="w-full max-w-sm p-8 space-y-6 bg-white rounded-xl shadow-lg">
-                <h2 className="text-2xl font-bold text-center text-gray-800">수정 코드 입력</h2>
-                <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="w-full max-w-lg p-8 text-center space-y-6 bg-white rounded-xl shadow-lg">
+                <CheckCircleIcon className="w-16 h-16 text-teal-500 mx-auto" />
+                <h2 className="text-2xl font-bold text-gray-800">글이 성공적으로 등록되었어요!</h2>
+                <p className="text-gray-600">
+                    나중에 글을 수정하고 싶을 때를 대비해서, 아래 '수정 코드'를 꼭 저장해주세요.
+                </p>
+                <div className="p-4 bg-indigo-50 rounded-lg">
+                    <p className="text-sm text-gray-700">나의 수정 코드</p>
+                    <div className="flex items-center justify-center gap-4 mt-2">
+                        <p className="text-2xl font-bold font-mono text-indigo-700 tracking-widest">{essay.editCode}</p>
+                        <button onClick={handleCopy} className="px-3 py-1 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700">
+                            {isCopied ? '복사됨!' : '복사'}
+                        </button>
+                    </div>
+                </div>
+                <button onClick={onFinish} className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700">
+                    갤러리로 이동하기
+                </button>
+            </div>
+        </div>
+    );
+};
+
+
+const CommentForm: React.FC<{
+    onSubmit: (content: string, authorInfo: { grade: number; class: number; number: number; name: string }) => Promise<void>;
+    studentInfo: Student | null;
+    isAdmin: boolean;
+}> = ({ onSubmit, studentInfo, isAdmin }) => {
+    const [content, setContent] = useState('');
+    const [author, setAuthor] = useState({ grade: '6', classNumber: '', studentId: '', name: '' });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    useEffect(() => {
+        if (isAdmin) {
+            setAuthor({ grade: '0', classNumber: '0', studentId: '0', name: '선생님' });
+        } else if (studentInfo) {
+            setAuthor({ ...studentInfo, studentId: studentInfo.studentId });
+        }
+    }, [studentInfo, isAdmin]);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setAuthor({ ...author, [e.target.name]: e.target.value });
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!content.trim() || !author.name.trim() || !author.classNumber.trim() || !author.studentId.trim()) {
+            alert('정보와 댓글 내용을 모두 입력해주세요.');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            await onSubmit(content, {
+                grade: parseInt(author.grade, 10),
+                class: parseInt(author.classNumber, 10),
+                number: parseInt(author.studentId, 10),
+                name: author.name,
+            });
+            setContent('');
+        } catch (error) {
+            alert('댓글 작성 중 오류가 발생했습니다.');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+    
+    const isAuthorInfoReadOnly = isAdmin || !!studentInfo;
+
+    return (
+        <form onSubmit={handleSubmit} className="border-t pt-6">
+            <div className={`grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3 ${isAuthorInfoReadOnly ? 'opacity-70' : ''}`}>
+                 <input type="text" value={author.grade} readOnly className="col-span-1 sm:col-span-1 block w-full px-2 py-1.5 bg-gray-100 border border-gray-300 rounded-md text-sm" placeholder="학년"/>
+                 <input type="number" name="classNumber" value={author.classNumber} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="반"/>
+                 <input type="number" name="studentId" value={author.studentId} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="번호"/>
+                 <input type="text" name="name" value={author.name} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="이름"/>
+            </div>
+            <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="w-full h-24 p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="따뜻한 응원과 격려의 댓글을 남겨주세요."
+                required
+            />
+            <div className="text-right mt-3">
+                <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300"
+                >
+                    {isSubmitting ? <LoadingSpinner /> : '댓글 달기'}
+                </button>
+            </div>
+        </form>
+    );
+};
+
+
+const EssayDetailView: React.FC<{
+    essay: Essay;
+    comments: Comment[];
+    onBack: () => void;
+    onLikeToggle: (essayId: string) => void;
+    isLiked: boolean;
+    onAddComment: (content: string, authorInfo: { grade: number; class: number; number: number; name: string }) => Promise<void>;
+    studentInfo: Student | null;
+    isAdmin: boolean;
+}> = ({ essay, comments, onBack, onLikeToggle, isLiked, onAddComment, studentInfo, isAdmin }) => {
+    
+    return (
+        <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
+            <div className="mb-6">
+                <button onClick={onBack} className="inline-flex items-center text-sm font-medium text-gray-600 hover:text-indigo-600">
+                    <ArrowLeftIcon className="w-5 h-5 mr-2" />
+                    목록으로 돌아가기
+                </button>
+            </div>
+
+            <article className="bg-white rounded-xl shadow-lg p-8">
+                <header className="border-b pb-4 mb-6">
+                    <h1 className="text-3xl font-bold text-gray-900">{essay.topic}</h1>
+                    <p className="mt-2 text-sm text-gray-500">
+                        {essay.student.grade}학년 {essay.student.classNumber}반 {essay.student.studentId}번 {essay.student.name}
+                        <span className="mx-2">•</span>
+                        {new Date(essay.createdAt).toLocaleDateString()}
+                    </p>
+                </header>
+                
+                <div className="prose prose-indigo max-w-none whitespace-pre-wrap">{essay.fullText}</div>
+
+                 {essay.body && essay.body.some(p => p.source.trim()) && (
+                    <div className="mt-8 pt-6 border-t">
+                        <h4 className="font-semibold text-gray-800 mb-2">출처 목록</h4>
+                        <ul className="list-disc list-inside bg-gray-50 p-3 rounded-md text-sm text-gray-700 space-y-1">
+                            {essay.body.filter(p => p.source.trim()).map((part, index) => (
+                                <li key={index}><Linkify text={part.source} /></li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+
+                <footer className="mt-8 pt-6 border-t flex items-center justify-between">
+                    <button
+                        onClick={() => onLikeToggle(essay.id)}
+                        disabled={isLiked}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-full transition-colors ${
+                            isLiked 
+                            ? 'bg-red-100 text-red-600 cursor-not-allowed opacity-75' 
+                            : 'bg-gray-100 text-gray-600 hover:bg-red-50'
+                        }`}
+                    >
+                        <HeartIcon className="w-5 h-5" filled={isLiked} />
+                        <span className="font-semibold">{essay.likes}</span>
+                    </button>
+                </footer>
+            </article>
+
+            <section className="mt-8 bg-white rounded-xl shadow-lg p-8">
+                <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <ChatBubbleIcon className="w-6 h-6 text-gray-500" />
+                    댓글 ({comments.length})
+                </h2>
+                <div className="space-y-4 mb-6 max-h-96 overflow-y-auto pr-2">
+                    {comments.length > 0 ? (
+                        comments.map(comment => (
+                            <div key={comment.id} className="p-4 bg-gray-50 rounded-lg">
+                                <p className="text-gray-800 whitespace-pre-wrap">{comment.content}</p>
+                                <p className="text-xs text-gray-500 mt-2">
+                                    {comment.authorName === '선생님' ? '선생님' : `${comment.authorGrade}학년 ${comment.authorClass}반 ${comment.authorNumber}번 ${comment.authorName}`}
+                                    <span className="mx-2">•</span>
+                                    {new Date(comment.createdAt).toLocaleString()}
+                                </p>
+                            </div>
+                        ))
+                    ) : (
+                        <p className="text-gray-500 text-sm">아직 댓글이 없습니다. 첫 댓글을 남겨보세요!</p>
+                    )}
+                </div>
+                <CommentForm onSubmit={onAddComment} studentInfo={studentInfo} isAdmin={isAdmin} />
+            </section>
+        </div>
+    );
+};
+
+const EditCodePrompt: React.FC<{
+    onFind: (code: string) => Promise<boolean>;
+    onCancel: () => void;
+}> = ({ onFind, onCancel }) => {
+    const [code, setCode] = useState('');
+    const [isFinding, setIsFinding] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        if (!code.trim()) {
+            setError('수정 코드를 입력해주세요.');
+            return;
+        }
+        setIsFinding(true);
+        const found = await onFind(code.trim());
+        if (!found) {
+            setError('코드가 일치하는 글을 찾을 수 없습니다.');
+        }
+        // On success, the parent component will change the view.
+        setIsFinding(false);
+    };
+
+    return (
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+            <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-xl shadow-lg">
+                <h2 className="text-2xl font-bold text-center text-gray-800">글 수정 또는 삭제</h2>
+                <p className="text-center text-sm text-gray-600">글을 작성할 때 받은 수정 코드를 입력해주세요.</p>
+                <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label htmlFor="edit-code" className="sr-only">수정 코드</label>
+                        <label htmlFor="editCode" className="block text-sm font-medium text-gray-700 sr-only">수정 코드</label>
                         <input
-                            id="edit-code"
-                            name="code"
                             type="text"
+                            id="editCode"
+                            name="editCode"
                             value={code}
-                            onChange={(e) => {
-                                setCode(e.target.value);
-                                if (error) setError('');
-                            }}
+                            onChange={(e) => { setCode(e.target.value); setError(''); }}
                             required
-                            maxLength={6}
-                            className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm text-center font-mono tracking-widest"
-                            placeholder="ABCDEF"
+                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            placeholder="수정 코드 (예: a1b2c3)"
                         />
                     </div>
-                    {error && <p className="text-sm text-red-600 text-center -mt-2 mb-2">{error}</p>}
+
+                    {error && <p className="text-sm text-red-600 text-center">{error}</p>}
+
                     <div className="flex flex-col-reverse sm:flex-row gap-2 pt-2">
-                        <button type="button" onClick={onBack} disabled={isFinding} className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
-                            뒤로가기
+                        <button type="button" onClick={onCancel} className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                            취소
                         </button>
-                        <button type="submit" disabled={isFinding} className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300">
-                            {isFinding ? <LoadingSpinner /> : '글 불러오기'}
+                        <button type="submit" disabled={isFinding} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300">
+                            {isFinding ? <LoadingSpinner /> : '글 찾기'}
                         </button>
                     </div>
                 </form>
@@ -533,55 +799,42 @@ const EditCodeEntry: React.FC<{ onFind: (code: string) => void; onBack: () => vo
     );
 };
 
-const EssayEditor: React.FC<{ essay: Essay; onSave: (updates: Partial<EssayData>) => void; onCancel: () => void; isSaving: boolean; }> = ({ essay, onSave, onCancel, isSaving }) => {
-    const [topic, setTopic] = useState(essay.topic);
-    const [fullText, setFullText] = useState(essay.fullText);
+const FoundEssayActionsView: React.FC<{
+    essay: Essay;
+    onEdit: () => void;
+    onDelete: () => void;
+    onCancel: () => void;
+}> = ({ essay, onEdit, onDelete, onCancel }) => {
 
-    const handleSave = () => {
-        if (!topic.trim() || !fullText.trim()) {
-            alert('주제와 본문 내용을 모두 입력해주세요.');
-            return;
-        }
-        onSave({
-            topic,
-            fullText,
-            introduction: fullText.split('\n')[0] || '',
-        });
+    const handleDelete = () => {
+        // The sandbox environment blocks `window.confirm`, so it was removed.
+        // Deletion is now immediate upon click.
+        onDelete();
     };
 
     return (
-        <div className="max-w-4xl mx-auto p-4 md:p-8">
-            <div className="flex justify-between items-start mb-6">
-                <h1 className="text-3xl font-bold text-gray-800">글 수정하기</h1>
-                <div className="text-sm text-gray-600 text-right">
-                    <p>{essay.student.grade}학년 {essay.student.classNumber}반</p>
-                    <p className="font-semibold">{essay.student.name}</p>
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+            <div className="w-full max-w-lg p-8 space-y-6 bg-white rounded-xl shadow-lg">
+                <h2 className="text-2xl font-bold text-center text-gray-800">어떤 작업을 하시겠어요?</h2>
+                <div className="p-4 bg-gray-50 rounded-lg text-left">
+                    <p className="text-sm text-gray-600">선택한 글:</p>
+                    <h3 className="font-bold text-indigo-700 text-lg truncate">{essay.topic}</h3>
+                    <p className="text-xs text-gray-500 mt-1">
+                        작성자: {essay.student.name} ({essay.student.grade}학년 {essay.student.classNumber}반 {essay.student.studentId}번)
+                    </p>
                 </div>
-            </div>
-            <div className="bg-white p-8 rounded-xl shadow-lg space-y-6">
-                <div>
-                    <label htmlFor="edit-topic" className="block text-lg font-semibold text-gray-800 mb-2">주제</label>
-                    <input
-                        id="edit-topic"
-                        type="text"
-                        value={topic}
-                        onChange={(e) => setTopic(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 transition"
-                    />
+
+                <div className="flex flex-col sm:flex-row gap-4 pt-4">
+                    <button onClick={onEdit} className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">
+                        글 수정하기
+                    </button>
+                    <button onClick={handleDelete} className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700">
+                        글 삭제하기
+                    </button>
                 </div>
-                <div>
-                    <label htmlFor="edit-fulltext" className="block text-lg font-semibold text-gray-800 mb-2">전체 글</label>
-                    <textarea
-                        id="edit-fulltext"
-                        value={fullText}
-                        onChange={(e) => setFullText(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-md min-h-[400px] leading-relaxed"
-                    />
-                </div>
-                <div className="mt-8 flex justify-end items-center gap-4">
-                    <button onClick={onCancel} disabled={isSaving} className="px-6 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50">취소</button>
-                    <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300">
-                        {isSaving ? <LoadingSpinner /> : <CheckCircleIcon />} 저장하기
+                 <div className="text-center pt-2">
+                    <button onClick={onCancel} className="text-sm text-gray-600 hover:underline">
+                        취소하고 갤러리로 돌아가기
                     </button>
                 </div>
             </div>
@@ -589,383 +842,329 @@ const EssayEditor: React.FC<{ essay: Essay; onSave: (updates: Partial<EssayData>
     );
 };
 
-const EssayDetailView: React.FC<{
-  essay: Essay;
-  comments: Comment[];
-  onClose: () => void;
-  onLike: (id: string) => void;
-  isLiked: boolean;
-  onAddComment: (content: string) => Promise<void>;
-  currentUserName?: string;
-  isLiking: boolean;
-  isCommenting: boolean;
-  isAdmin: boolean;
-  onDelete?: (id: string) => void;
-}> = ({ essay, comments, onClose, onLike, isLiked, onAddComment, currentUserName, isLiking, isCommenting, isAdmin, onDelete }) => {
-    const [commentContent, setCommentContent] = useState('');
-
-    const handleCommentSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!currentUserName || !commentContent.trim()) {
-            alert('의견 내용을 입력해주세요.');
-            return;
-        }
-        await onAddComment(commentContent.trim());
-        setCommentContent('');
-    };
-
-    const handleDelete = () => {
-        if (onDelete && window.confirm("정말로 이 글을 삭제하시겠습니까? 삭제된 글은 복구할 수 없습니다.")) {
-            onDelete(essay.id);
-        }
-    }
-
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4" style={{ animation: 'fadeIn 0.3s ease-out' }}>
-            <style>{`@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl h-full max-h-[90vh] flex flex-col">
-                <header className="p-4 border-b flex justify-between items-center flex-shrink-0">
-                    <h2 className="text-xl font-bold text-gray-800 truncate pr-4">{essay.topic}</h2>
-                    <div className="flex items-center gap-2">
-                        {isAdmin && onDelete && (
-                             <button
-                                onClick={handleDelete}
-                                className="p-2 rounded-full text-gray-500 hover:bg-red-100 hover:text-red-600 transition-colors"
-                                aria-label="삭제하기"
-                            >
-                                <TrashIcon className="w-5 h-5" />
-                            </button>
-                        )}
-                        <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100">
-                            <XIcon className="w-6 h-6 text-gray-600" />
-                        </button>
-                    </div>
-                </header>
-                <main className="flex-1 overflow-y-auto p-6 md:p-8">
-                    <div className="mb-6">
-                        <p className="text-sm text-gray-500">{essay.student.grade}학년 {essay.student.classNumber}반 {essay.student.studentId}번</p>
-                        <p className="font-semibold text-gray-700">{essay.student.name}</p>
-                        <p className="text-xs text-gray-400 mt-1">{new Date(essay.createdAt).toLocaleString()}</p>
-                    </div>
-                    <div className="prose prose-indigo max-w-none whitespace-pre-wrap leading-relaxed">
-                        {essay.fullText}
-                    </div>
-                </main>
-                <footer className="p-4 border-t bg-gray-50 flex-shrink-0">
-                     <div className="flex justify-between items-center mb-4">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => onLike(essay.id)} disabled={isLiking} className="flex items-center gap-2 text-red-500 hover:text-red-700 disabled:opacity-50 transition-colors">
-                                <HeartIcon className="w-6 h-6" filled={isLiked} />
-                                <span className="font-semibold">{essay.likes}</span>
-                            </button>
-                            <div className="flex items-center gap-2 text-blue-500">
-                                <ChatBubbleIcon className="w-6 h-6" />
-                                <span className="font-semibold">{comments.length}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="max-h-48 overflow-y-auto space-y-3 mb-4 p-3 bg-white rounded-md border">
-                        {comments.length > 0 ? comments.map(comment => (
-                            <div key={comment.id} className="text-sm break-words">
-                                <span className="font-bold text-gray-800">{comment.authorName}: </span>
-                                <span className="text-gray-600">{comment.content}</span>
-                            </div>
-                        )) : <p className="text-sm text-gray-400 text-center py-2">아직 댓글이 없습니다. 첫 댓글을 남겨보세요!</p>}
-                    </div>
-                    <form onSubmit={handleCommentSubmit} className="flex items-start gap-2">
-                        <div className="w-24 px-2 py-1.5 border rounded-md bg-gray-100 text-center text-sm font-medium text-gray-700 truncate" title={currentUserName}>
-                            {currentUserName || '??'}
-                        </div>
-                        <input type="text" value={commentContent} onChange={e => setCommentContent(e.target.value)} placeholder="의견을 남겨주세요..." className="flex-1 px-3 py-1.5 border rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500" />
-                        <button type="submit" disabled={isCommenting || !currentUserName} className="px-4 py-1.5 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700 disabled:bg-indigo-300 flex items-center justify-center w-20">
-                            {isCommenting ? <LoadingSpinner size="w-4 h-4" /> : '등록'}
-                        </button>
-                    </form>
-                </footer>
-            </div>
-        </div>
-    );
-};
-
-// ---------- LOCALSTORAGE HELPERS ----------
-// 각 학생마다 독립적인 '좋아요' 기록을 저장하기 위해 학생 정보를 기반으로 고유 키를 생성합니다.
-// 이를 통해 한 컴퓨터에서 여러 학생이 사용하더라도 '좋아요' 상태가 겹치지 않습니다.
-const getStudentKey = (student: Student | null): string => {
-    if (!student) return 'teacher-or-default'; // 학생 정보가 없는 경우 (선생님 또는 초기 상태)
-    return `student-${student.grade}-${student.classNumber}-${student.studentId}-${student.name.replace(/\s/g, '')}`;
-}
-
-const getLikedEssays = (studentKey: string): string[] => {
-    const LIKED_ESSAYS_KEY = `writing-app-liked-essays-${studentKey}`;
-    try {
-        const liked = localStorage.getItem(LIKED_ESSAYS_KEY);
-        return liked ? JSON.parse(liked) : [];
-    } catch (error) {
-        console.error("Failed to parse liked essays from localStorage", error);
-        return [];
-    }
-};
-
-const addLikedEssay = (id: string, studentKey: string) => {
-    const LIKED_ESSAYS_KEY = `writing-app-liked-essays-${studentKey}`;
-    const liked = getLikedEssays(studentKey);
-    if (!liked.includes(id)) {
-        localStorage.setItem(LIKED_ESSAYS_KEY, JSON.stringify([...liked, id]));
-    }
-};
-
-const removeLikedEssay = (id: string, studentKey: string) => {
-    const LIKED_ESSAYS_KEY = `writing-app-liked-essays-${studentKey}`;
-    const liked = getLikedEssays(studentKey);
-    localStorage.setItem(LIKED_ESSAYS_KEY, JSON.stringify(liked.filter(likedId => likedId !== id)));
-};
 
 // ---------- MAIN APP COMPONENT ----------
 
-type View = 'landing' | 'student-info' | 'teacher-login' | 'gallery' | 'writing' | 'submitted' | 'edit-entry' | 'editing';
+type CurrentView = 'landing' | 'student-info' | 'teacher-login' | 'writing' | 'gallery' | 'detail' | 'writing-success' | 'edit-code-prompt' | 'editing' | 'found-essay-actions';
 
 const App: React.FC = () => {
-    const [view, setView] = useState<View>('landing');
-    const [role, setRole] = useState<UserRole | null>(null);
-    const [isTeacherLoggedIn, setIsTeacherLoggedIn] = useState(false);
+    const [currentView, setCurrentView] = useState<CurrentView>('landing');
+    const [userRole, setUserRole] = useState<UserRole | null>(null);
+    const [studentInfo, setStudentInfo] = useState<Student | null>(null);
+    const [isAdmin, setIsAdmin] = useState(false);
     
-    const [student, setStudent] = useState<Student | null>(null);
     const [essays, setEssays] = useState<Essay[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [dbError, setDbError] = useState<string | null>(null);
-
-    const [lastSubmittedCode, setLastSubmittedCode] = useState<string>('');
-    const [essayToEdit, setEssayToEdit] = useState<Essay | null>(null);
-    const [isFinding, setIsFinding] = useState(false);
-    const [isSaving, setIsSaving] = useState(false);
-
     const [selectedEssay, setSelectedEssay] = useState<Essay | null>(null);
+    const [essayToEdit, setEssayToEdit] = useState<Essay | null>(null);
+    const [lastSubmittedEssay, setLastSubmittedEssay] = useState<Essay | null>(null);
     const [comments, setComments] = useState<Comment[]>([]);
-    const [isLiking, setIsLiking] = useState(false);
-    const [isCommenting, setIsCommenting] = useState(false);
+    const [likedEssayIds, setLikedEssayIds] = useState<Set<string>>(new Set());
     
-    const [likedEssayIds, setLikedEssayIds] = useState<string[]>([]);
-    const studentKey = useMemo(() => getStudentKey(student), [student]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        setLikedEssayIds(getLikedEssays(studentKey));
-    }, [studentKey]);
+        try {
+            const liked = window.localStorage.getItem('likedEssays');
+            if (liked) {
+                setLikedEssayIds(new Set(JSON.parse(liked)));
+            }
+        } catch (e) {
+            console.error("Failed to parse liked essays from localStorage", e);
+        }
+    }, []);
 
-    const fetchEssays = useCallback(async () => {
+    const fetchAllEssays = useCallback(async () => {
         setIsLoading(true);
-        setDbError(null);
+        setError(null);
         try {
             const data = await getAllEssays();
             setEssays(data);
-        } catch (error: any) {
-            console.error(error);
-            setDbError(error.message || '데이터를 불러오는 데 실패했습니다.');
+        } catch (err) {
+            setError('글 목록을 불러오는 데 실패했습니다.');
+            console.error(err);
         } finally {
             setIsLoading(false);
         }
     }, []);
+    
+    useEffect(() => {
+        if (currentView === 'gallery') {
+            fetchAllEssays();
+        }
+    }, [currentView, fetchAllEssays]);
 
     useEffect(() => {
-        if (view === 'gallery' || isTeacherLoggedIn) {
-            fetchEssays();
-        }
-    }, [view, isTeacherLoggedIn, fetchEssays]);
+        const fetchComments = async () => {
+            if (selectedEssay) {
+                try {
+                    const data = await getComments(selectedEssay.id);
+                    setComments(data);
+                } catch (err) {
+                    console.error("Failed to fetch comments:", err);
+                    alert('댓글을 불러오는 데 실패했습니다.');
+                }
+            }
+        };
+        fetchComments();
+    }, [selectedEssay]);
 
-    const resetState = () => {
-        setView('landing');
-        setRole(null);
-        setIsTeacherLoggedIn(false);
-        setStudent(null);
-        setEssayToEdit(null);
-        setSelectedEssay(null);
+    const handleSelectRole = (role: UserRole) => {
+        setUserRole(role);
+        if (role === UserRole.STUDENT) {
+            setCurrentView('student-info');
+        } else {
+            setCurrentView('teacher-login');
+        }
     };
 
-    const handleSelectRole = (selectedRole: UserRole) => {
-        setRole(selectedRole);
-        if (selectedRole === UserRole.STUDENT) setView('student-info');
-        if (selectedRole === UserRole.TEACHER) setView('teacher-login');
+    const handleBackToLanding = () => {
+        setCurrentView('landing');
+        setUserRole(null);
+        setStudentInfo(null);
+        setIsAdmin(false);
     };
 
     const handleStudentStart = (info: Student) => {
-        setStudent(info);
-        setView('gallery');
+        setStudentInfo(info);
+        setCurrentView('gallery');
     };
     
-    const handleCompleteWriting = async (essayData: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => {
-        setIsSaving(true);
+    const handleStartWriting = () => {
+        if(!studentInfo && !isAdmin) {
+             alert("학생 정보가 없습니다. 시작 화면으로 돌아가 다시 정보를 입력해주세요.");
+             setCurrentView('student-info');
+             return;
+        }
+         if(!studentInfo) {
+             alert("글쓰기는 학생만 가능합니다.");
+             return;
+        }
+        setCurrentView('writing');
+    };
+
+    const handleTeacherLogin = () => {
+        setIsAdmin(true);
+        setCurrentView('gallery');
+    };
+
+    const handleWritingComplete = async (essayData: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => {
+        setIsLoading(true);
         try {
             const newEssay = await addEssay(essayData);
-            setEssays(prev => [newEssay, ...prev]);
-            setLastSubmittedCode(newEssay.editCode);
-            setView('submitted');
-        } catch (error) {
-            alert('글 저장에 실패했습니다. 다시 시도해주세요.');
-            console.error(error);
+            setLastSubmittedEssay(newEssay);
+            setCurrentView('writing-success');
+        } catch (err) {
+            alert('글을 저장하는 데 실패했습니다.');
+            console.error(err);
         } finally {
-            setIsSaving(false);
-        }
-    };
-
-    const handleFindEssayToEdit = async (code: string) => {
-        setIsFinding(true);
-        try {
-            const found = await findEssayByEditCode(code);
-            if (found) {
-                setEssayToEdit(found);
-                setView('editing');
-            } else {
-                alert('해당 코드를 가진 글을 찾을 수 없습니다.');
-            }
-        } catch (error) {
-            alert('글을 찾는 중 오류가 발생했습니다.');
-            console.error(error);
-        } finally {
-            setIsFinding(false);
+            setIsLoading(false);
         }
     };
     
-    const handleSaveEdit = async (updates: Partial<EssayData>) => {
+    const handleWritingUpdate = async (essayData: EssayData) => {
         if (!essayToEdit) return;
-        setIsSaving(true);
+        setIsLoading(true);
         try {
-            const updatedEssay = await updateEssay(essayToEdit.editCode, updates);
-            setEssays(prev => prev.map(e => e.id === updatedEssay.id ? updatedEssay : e));
-            setView('gallery');
-            setEssayToEdit(null);
+            await updateEssay(essayToEdit.editCode, essayData);
             alert('글이 성공적으로 수정되었습니다.');
-        } catch (error) {
-            alert('수정에 실패했습니다.');
+            setEssayToEdit(null);
+            setCurrentView('gallery');
+        } catch (err) {
+            alert('글 수정에 실패했습니다. 다시 시도해주세요.');
+            console.error(err);
         } finally {
-            setIsSaving(false);
+            setIsLoading(false);
+        }
+    };
+    
+    const handleStartModify = () => {
+        setCurrentView('edit-code-prompt');
+    };
+
+    const handleFindEssayToEdit = async (code: string): Promise<boolean> => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const essay = await findEssayByEditCode(code);
+            if (essay) {
+                setEssayToEdit(essay);
+                setCurrentView('found-essay-actions');
+                return true;
+            }
+            return false;
+        } catch (err) {
+            setError('코드를 확인하는 중 오류가 발생했습니다.');
+            console.error(err);
+            return false;
+        } finally {
+            setIsLoading(false);
         }
     };
 
-    const handleDeleteEssay = useCallback(async (id: string) => {
+    const handleSelectEssay = (essay: Essay) => {
+        setSelectedEssay(essay);
+        setCurrentView('detail');
+    };
+
+    const handleBackToGallery = () => {
+        setSelectedEssay(null);
+        setEssayToEdit(null);
+        setComments([]);
+        setCurrentView('gallery');
+    };
+    
+    const handleDeleteEssay = async (id: string) => {
+        setIsLoading(true);
         try {
             await deleteEssay(id);
-            setEssays(prev => prev.filter(essay => essay.id !== id));
-            if (selectedEssay?.id === id) {
-                setSelectedEssay(null);
-            }
-        } catch (error) {
-            console.error("Failed to delete essay:", error);
-            alert("글 삭제에 실패했습니다. 다시 시도해주세요.");
+            setEssays(prev => prev.filter(e => e.id !== id));
+        } catch (err: any) {
+            alert(`글 삭제에 실패했습니다: ${err.message}`);
+            console.error(err);
+        } finally {
+            setIsLoading(false);
         }
-    }, [selectedEssay]);
-
-    const handleSelectEssay = useCallback(async (essay: Essay) => {
-        setSelectedEssay(essay);
-        setComments([]);
-        try {
-            const fetchedComments = await getComments(essay.id);
-            setComments(fetchedComments);
-        } catch (error) {
-            console.error("Failed to fetch comments:", error);
-            alert("댓글을 불러오는 데 실패했습니다.");
+    };
+    
+     const handleLikeToggle = async (essayId: string) => {
+        if (likedEssayIds.has(essayId)) {
+            // 이미 '좋아요'를 누른 경우 아무 작업도 하지 않음
+            return;
         }
-    }, []);
 
-    const handleLike = useCallback(async (id: string) => {
-        const isLiked = likedEssayIds.includes(id);
-        setIsLiking(true);
-        try {
-            const updatedEssay = isLiked ? await decrementLike(id) : await incrementLike(id);
-            
-            if (isLiked) {
-                removeLikedEssay(id, studentKey);
-                setLikedEssayIds(prev => prev.filter(likedId => likedId !== id));
-            } else {
-                addLikedEssay(id, studentKey);
-                setLikedEssayIds(prev => [...prev, id]);
-            }
+        const newLikedIds = new Set(likedEssayIds);
+        newLikedIds.add(essayId);
+        setLikedEssayIds(newLikedIds);
+        window.localStorage.setItem('likedEssays', JSON.stringify(Array.from(newLikedIds)));
 
-            setEssays(prev => prev.map(e => e.id === id ? updatedEssay : e));
-            if (selectedEssay?.id === id) {
+        const updateLikesInState = (updatedEssay: Essay) => {
+            setEssays(prevEssays => prevEssays.map(e => e.id === essayId ? updatedEssay : e));
+            if (selectedEssay?.id === essayId) {
                 setSelectedEssay(updatedEssay);
             }
-        } catch (error) {
-            console.error("Failed to toggle like on essay:", error);
-            alert("좋아요 처리에 실패했습니다.");
-        } finally {
-            setIsLiking(false);
-        }
-    }, [selectedEssay, likedEssayIds, studentKey]);
+        };
 
-    const isAdmin = role === UserRole.TEACHER && isTeacherLoggedIn;
-    const currentUserName = isAdmin ? '선생님' : student?.name;
-
-    const handleAddComment = useCallback(async (content: string) => {
-        if (!selectedEssay || !currentUserName) return;
-        setIsCommenting(true);
         try {
-            const newComment = await addComment(selectedEssay.id, currentUserName, content);
-            setComments(prev => [...prev, newComment]);
-        } catch (error) {
-            console.error("Failed to add comment:", error);
-            alert("댓글 등록에 실패했습니다.");
-        } finally {
-            setIsCommenting(false);
+            const updatedEssay = await incrementLike(essayId);
+            updateLikesInState(updatedEssay);
+        } catch (err) {
+            console.error('Failed to update likes:', err);
+            alert('좋아요 상태 변경에 실패했습니다.');
+            // 실패 시 UI 변경사항 되돌리기
+            const revertedLikedIds = new Set(likedEssayIds);
+            revertedLikedIds.delete(essayId);
+            setLikedEssayIds(revertedLikedIds);
+            window.localStorage.setItem('likedEssays', JSON.stringify(Array.from(revertedLikedIds)));
         }
-    }, [selectedEssay, currentUserName]);
+    };
 
-    // Main render logic
+    const handleAddComment = async (content: string, authorInfo: { grade: number; class: number; number: number; name: string }) => {
+        if (!selectedEssay) return;
+        try {
+            const newComment = await addComment(selectedEssay.id, authorInfo.name, content, authorInfo);
+            setComments(prev => [...prev, newComment].sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()));
+        } catch (err) {
+            console.error('Failed to add comment:', err);
+            throw err;
+        }
+    };
+
+    const handleStartEditingFoundEssay = () => {
+        if (essayToEdit) {
+            setCurrentView('editing');
+        }
+    };
+
+    const handleDeleteFoundEssay = async () => {
+        if (essayToEdit) {
+            await handleDeleteEssay(essayToEdit.id);
+            handleBackToGallery(); // 삭제 후 갤러리로 이동
+        }
+    };
+
     const renderContent = () => {
-        if (selectedEssay) {
-            return (
-                <EssayDetailView
-                    essay={selectedEssay}
-                    comments={comments}
-                    onClose={() => setSelectedEssay(null)}
-                    onLike={handleLike}
-                    isLiked={likedEssayIds.includes(selectedEssay.id)}
-                    onAddComment={handleAddComment}
-                    currentUserName={currentUserName}
-                    isLiking={isLiking}
-                    isCommenting={isCommenting}
-                    isAdmin={isAdmin}
-                    onDelete={isAdmin ? handleDeleteEssay : undefined}
-                />
-            );
+        if (isLoading && !['edit-code-prompt', 'editing', 'found-essay-actions'].includes(currentView)) {
+            return <div className="flex justify-center items-center h-screen"><LoadingSpinner size="w-12 h-12" /></div>;
+        }
+        if (error) {
+            return <div className="text-center text-red-500 p-8">{error}</div>;
         }
 
-        switch (view) {
+        switch (currentView) {
             case 'landing':
                 return <LandingPage onSelectRole={handleSelectRole} />;
             case 'student-info':
-                return <StudentInfoForm onStart={handleStudentStart} onBack={resetState} />;
+                return <StudentInfoForm onStart={handleStudentStart} onBack={handleBackToLanding} />;
             case 'teacher-login':
-                return <TeacherLogin onLogin={() => { setIsTeacherLoggedIn(true); setView('gallery'); }} onBack={resetState} />;
-            case 'gallery':
-                return (
-                    <EssayGallery
-                        essays={essays}
-                        onStartWriting={() => setView('writing')}
-                        onSelectEssay={handleSelectEssay}
-                        isLoading={isLoading}
-                        isAdmin={isAdmin}
-                        onBackToLanding={resetState}
-                        dbError={dbError}
-                        onEditRequest={() => setView('edit-entry')}
-                        onDeleteEssay={isAdmin ? handleDeleteEssay : undefined}
-                        likedEssayIds={likedEssayIds}
-                    />
-                );
+                return <TeacherLogin onLogin={handleTeacherLogin} onBack={handleBackToLanding} />;
             case 'writing':
-                if (!student) return <StudentInfoForm onStart={handleStudentStart} onBack={() => setView('gallery')} />;
-                return <WritingWizard student={student} onComplete={handleCompleteWriting} onBackToGallery={() => setView('gallery')} />;
-            case 'submitted':
-                return <SubmissionSuccessPage editCode={lastSubmittedCode} onGoToGallery={() => setView('gallery')} />;
-            case 'edit-entry':
-                return <EditCodeEntry onFind={handleFindEssayToEdit} onBack={() => setView('gallery')} isFinding={isFinding} />;
+                if (!studentInfo) {
+                    setCurrentView('student-info');
+                    return null;
+                }
+                return <WritingWizard student={studentInfo} onComplete={handleWritingComplete} onBackToGallery={handleBackToGallery} />;
             case 'editing':
-                if (!essayToEdit) return <EditCodeEntry onFind={handleFindEssayToEdit} onBack={() => setView('gallery')} isFinding={isFinding} />;
-                return <EssayEditor essay={essayToEdit} onSave={handleSaveEdit} onCancel={() => { setView('gallery'); setEssayToEdit(null); }} isSaving={isSaving} />;
+                if (!essayToEdit) {
+                    handleBackToGallery();
+                    return null;
+                }
+                return <WritingWizard student={essayToEdit.student} initialData={essayToEdit} onUpdate={handleWritingUpdate} onBackToGallery={handleBackToGallery} />;
+            case 'writing-success':
+                 if (!lastSubmittedEssay) {
+                    handleBackToGallery();
+                    return null;
+                 }
+                 return <WritingSuccessView essay={lastSubmittedEssay} onFinish={handleBackToGallery} />;
+            case 'gallery':
+                return <GalleryView
+                    essays={essays}
+                    onSelectEssay={handleSelectEssay}
+                    onNewEssay={handleStartWriting}
+                    onModifyEssay={handleStartModify}
+                    onDeleteEssay={handleDeleteEssay}
+                    isAdmin={isAdmin}
+                    likedEssayIds={likedEssayIds}
+                    onGoHome={handleBackToLanding}
+                />;
+            case 'detail':
+                if (!selectedEssay) {
+                    handleBackToGallery();
+                    return null;
+                }
+                return <EssayDetailView
+                    essay={selectedEssay}
+                    comments={comments}
+                    onBack={handleBackToGallery}
+                    onLikeToggle={handleLikeToggle}
+                    isLiked={likedEssayIds.has(selectedEssay.id)}
+                    onAddComment={handleAddComment}
+                    studentInfo={studentInfo}
+                    isAdmin={isAdmin}
+                 />;
+            case 'edit-code-prompt':
+                return <EditCodePrompt onFind={handleFindEssayToEdit} onCancel={handleBackToGallery} />;
+            case 'found-essay-actions':
+                if (!essayToEdit) {
+                    handleBackToGallery();
+                    return null;
+                }
+                return <FoundEssayActionsView
+                    essay={essayToEdit}
+                    onEdit={handleStartEditingFoundEssay}
+                    onDelete={handleDeleteFoundEssay}
+                    onCancel={handleBackToGallery}
+                />;
             default:
                 return <LandingPage onSelectRole={handleSelectRole} />;
         }
     };
-    
-    return <>{renderContent()}</>;
+
+    if (!isSupabaseConfigured) {
+        return <SupabaseSetupNeeded />;
+    }
+
+    return <div className="bg-gray-50 min-h-screen">{renderContent()}</div>;
 };
 
 export default App;

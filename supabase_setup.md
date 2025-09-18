@@ -11,7 +11,11 @@ DROP TABLE IF EXISTS public.essays;
 CREATE TABLE public.essays (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   title TEXT NOT NULL,
-  content TEXT NOT NULL,
+  introduction TEXT NOT NULL,
+  body JSONB NOT NULL,
+  conclusion TEXT NOT NULL,
+  full_text TEXT NOT NULL,
+  edit_code TEXT NOT NULL UNIQUE,
   author_grade INTEGER NOT NULL,
   author_class INTEGER NOT NULL,
   author_number INTEGER NOT NULL,
@@ -53,38 +57,6 @@ CREATE POLICY "Allow public update" ON public.comments FOR UPDATE TO anon USING 
 CREATE POLICY "Allow public delete" ON public.essays FOR DELETE TO anon USING (true);
 CREATE POLICY "Allow public delete" ON public.comments FOR DELETE TO anon USING (true);
 
--- 기존 함수 삭제 후 재생성
-DROP FUNCTION IF EXISTS delete_essay_by_id(UUID);
-
--- 강화된 삭제 함수 생성
-CREATE OR REPLACE FUNCTION delete_essay_by_id(essay_id UUID)
-RETURNS json
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  result json;
-BEGIN
-  -- 글이 존재하는지 확인
-  IF NOT EXISTS (SELECT 1 FROM public.essays WHERE id = essay_id) THEN
-    RETURN json_build_object('success', false, 'error', 'Essay not found');
-  END IF;
-  
-  -- 삭제 실행
-  DELETE FROM public.essays WHERE id = essay_id;
-  
-  -- 성공 응답
-  RETURN json_build_object('success', true, 'message', 'Essay deleted successfully');
-EXCEPTION
-  WHEN OTHERS THEN
-    RETURN json_build_object('success', false, 'error', SQLERRM);
-END;
-$$;
-
--- 실행 권한 부여
-GRANT EXECUTE ON FUNCTION delete_essay_by_id(UUID) TO anon;
-GRANT EXECUTE ON FUNCTION delete_essay_by_id(UUID) TO authenticated;
-
 -- 좋아요 기능을 위한 함수
 CREATE OR REPLACE FUNCTION increment_likes(essay_id UUID)
 RETURNS INTEGER
@@ -103,29 +75,9 @@ BEGIN
 END;
 $$;
 
--- 좋아요 감소 함수
-CREATE OR REPLACE FUNCTION decrement_likes(essay_id UUID)
-RETURNS INTEGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  new_likes_count INTEGER;
-BEGIN
-  UPDATE public.essays 
-  SET likes = GREATEST(likes - 1, 0)
-  WHERE id = essay_id
-  RETURNING likes INTO new_likes_count;
-  
-  RETURN COALESCE(new_likes_count, 0);
-END;
-$$;
-
 -- 좋아요 함수들에 권한 부여
 GRANT EXECUTE ON FUNCTION increment_likes(UUID) TO anon;
 GRANT EXECUTE ON FUNCTION increment_likes(UUID) TO authenticated;
-GRANT EXECUTE ON FUNCTION decrement_likes(UUID) TO anon;
-GRANT EXECUTE ON FUNCTION decrement_likes(UUID) TO authenticated;
 
 -- END: 이 라인까지 복사하세요.
 ```

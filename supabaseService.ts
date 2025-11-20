@@ -1,14 +1,9 @@
-
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Essay, Comment, Student, EssayData, BodyPart } from '../types';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../constants';
 
-// Cast to string to prevent TypeScript from narrowing empty constants to "never" in truthiness checks
-const supabaseUrl = SUPABASE_URL as string;
-const supabaseKey = SUPABASE_ANON_KEY as string;
-
-const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey && !supabaseUrl.includes('your-project-url'))
-    ? createClient(supabaseUrl, supabaseKey)
+const supabase: SupabaseClient | null = (SUPABASE_URL && SUPABASE_ANON_KEY && !SUPABASE_URL.includes('your-project-url'))
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
 export const isSupabaseConfigured = !!supabase;

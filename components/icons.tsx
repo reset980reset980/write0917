@@ -72,3 +72,9 @@ export const XIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
   </svg>
 );
+
+export const ChatBubbleLeftRightIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193l-3.72-3.72a1.063 1.063 0 0 0-1.5 0l-3.72 3.72a1.063 1.063 0 0 1-1.5 0l-3.72-3.72-3.72 3.72c-1.133-.093-1.98-1.057-1.98-2.193v-4.286c0-.97.616-1.813 1.5-2.097m14.25-3.72a1.063 1.063 0 0 0-1.5 0l-3.72 3.72a1.063 1.063 0 0 1-1.5 0l-3.72-3.72a1.063 1.063 0 0 0-1.5 0l-3.72 3.72a1.063 1.063 0 0 1-1.5 0l-3.72-3.72c-.97.283-1.636 1.127-1.636 2.097v4.286c0 1.06.768 1.95 1.794 2.149l3.72-3.72a1.063 1.063 0 0 1 1.5 0l3.72 3.72a1.063 1.063 0 0 0 1.5 0l3.72-3.72a1.063 1.063 0 0 1 1.5 0l3.72 3.72c1.026-.199 1.794-1.089 1.794-2.149v-4.286c0-.97-.666-1.814-1.636-2.097l-3.72 3.72a1.063 1.063 0 0 0-1.5 0l-3.72-3.72a1.063 1.063 0 0 1-1.5 0Z" />
+  </svg>
+);

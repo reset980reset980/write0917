@@ -1,12 +1,11 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { TEACHER_PASSWORD } from './constants';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { UserRole, type Student, type Essay, type EssayData, type BodyPart, type Comment } from './types';
-import { getTopicSuggestions } from './services/geminiService';
-import { isSupabaseConfigured, getAllEssays, addEssay, deleteEssay, incrementLike, getComments, addComment, findEssayByEditCode, updateEssay } from './services/supabaseService';
+import { getTopicSuggestions, getWritingAssistantResponse } from './services/geminiService';
+import { isSupabaseConfigured, getAllEssays, addEssay, deleteEssay, incrementLike, getComments, addComment, findEssayByEditCode, updateEssay, verifyTeacherPassword } from './services/supabaseService';
 import {
   UserIcon, TeacherIcon, SparklesIcon, PlusIcon, TrashIcon,
-  ChevronRightIcon, ChevronLeftIcon, CheckCircleIcon, ArrowLeftIcon, HeartIcon, ChatBubbleIcon, XIcon
+  ChevronRightIcon, ChevronLeftIcon, CheckCircleIcon, ArrowLeftIcon, HeartIcon, ChatBubbleIcon, XIcon, ChatBubbleLeftRightIcon
 } from './components/icons';
 import LoadingSpinner from './components/LoadingSpinner';
 import EssayCard from './components/EssayCard';
@@ -32,6 +31,10 @@ const Linkify: React.FC<{ text: string }> = ({ text }) => {
     );
 };
 
+interface ChatMessage {
+    role: 'user' | 'assistant' | 'error';
+    content: string;
+}
 
 // ---------- VIEWS / MAJOR COMPONENTS ----------
 
@@ -136,13 +139,24 @@ const StudentInfoForm: React.FC<{ onStart: (info: Student) => void; onBack: () =
 const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ onLogin, onBack }) => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (password === TEACHER_PASSWORD) {
-            onLogin();
-        } else {
-            setError('비밀번호가 올바르지 않습니다.');
+        setIsLoading(true);
+        setError('');
+        try {
+            const isValid = await verifyTeacherPassword(password);
+            if (isValid) {
+                onLogin();
+            } else {
+                setError('비밀번호가 올바르지 않습니다.');
+            }
+        } catch (err) {
+            console.error(err);
+            setError('로그인 중 오류가 발생했습니다. 다시 시도해주세요.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -172,10 +186,90 @@ const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ 
                         <button type="button" onClick={onBack} className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                             뒤로가기
                         </button>
-                        <button type="submit" className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">
-                            관리자 페이지로 이동
+                        <button type="submit" disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 disabled:bg-teal-300">
+                             {isLoading ? <LoadingSpinner size="w-5 h-5" /> : '관리자 페이지로 이동'}
                         </button>
                     </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const ChatModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    history: ChatMessage[];
+    isLoading: boolean;
+    onSendMessage: (message: string) => void;
+}> = ({ isOpen, onClose, history, isLoading, onSendMessage }) => {
+    const [input, setInput] = useState('');
+    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    useEffect(scrollToBottom, [history]);
+    
+    if (!isOpen) return null;
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (input.trim() && !isLoading) {
+            onSendMessage(input.trim());
+            setInput('');
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-40 flex justify-center items-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <header className="flex justify-between items-center p-4 border-b">
+                    <h3 className="text-lg font-bold text-indigo-700 flex items-center gap-2">
+                        <SparklesIcon className="w-5 h-5" />
+                        AI 글쓰기 도우미
+                    </h3>
+                    <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100">
+                        <XIcon className="w-6 h-6" />
+                    </button>
+                </header>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {history.map((msg, index) => (
+                        <div key={index} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            {msg.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0"><SparklesIcon className="w-5 h-5 text-indigo-500"/></div>}
+                            <div className={`max-w-md p-3 rounded-xl whitespace-pre-wrap ${
+                                msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' :
+                                msg.role === 'assistant' ? 'bg-gray-100 text-gray-800 rounded-bl-none' :
+                                'bg-red-100 text-red-800 rounded-bl-none'
+                            }`}>
+                                <Linkify text={msg.content} />
+                            </div>
+                        </div>
+                    ))}
+                    {isLoading && (
+                        <div className="flex justify-start gap-3">
+                            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0"><SparklesIcon className="w-5 h-5 text-indigo-500"/></div>
+                            <div className="p-3 rounded-xl bg-gray-100 flex items-center gap-2">
+                                <LoadingSpinner size="w-4 h-4" />
+                                <span className="text-sm text-gray-600">생각 중...</span>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                </div>
+                <form onSubmit={handleSubmit} className="p-4 border-t flex items-center gap-2">
+                    <input
+                        type="text"
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        placeholder="궁금한 점을 물어보세요..."
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        disabled={isLoading}
+                    />
+                    <button type="submit" disabled={isLoading || !input.trim()} className="px-4 py-2 bg-indigo-600 text-white rounded-full disabled:bg-indigo-300">
+                        전송
+                    </button>
                 </form>
             </div>
         </div>
@@ -205,6 +299,13 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
     const [isRefining, setIsRefining] = useState(false);
     const [finalFullText, setFinalFullText] = useState(initialData?.fullText || '');
 
+    // New state for AI Chatbot
+    const [isChatOpen, setIsChatOpen] = useState(false);
+    const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
+        { role: 'assistant', content: '안녕하세요! 글쓰다가 막히는 부분이 있으면 언제든지 저에게 물어보세요.' }
+    ]);
+    const [isChatLoading, setIsChatLoading] = useState(false);
+
     const handleRefineTopic = async () => {
         if (!topic.trim()) {
             alert('먼저 주제를 입력해주세요.');
@@ -217,6 +318,33 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
         setRefinedTopic(result.refinedTopic);
         setTopicSuggestions(result.suggestions);
         setIsRefining(false);
+    };
+    
+    const finalTopic = refinedTopic || topic;
+
+    const handleSendMessage = async (message: string) => {
+        const newUserMessage: ChatMessage = { role: 'user', content: message };
+        setChatHistory(prev => [...prev, newUserMessage]);
+        setIsChatLoading(true);
+
+        const context = {
+            topic: finalTopic,
+            introduction,
+            body: body.map(part => `근거: ${part.reason}\n출처: ${part.source}`).join('\n\n'),
+            conclusion,
+        };
+
+        try {
+            const response = await getWritingAssistantResponse(context, message);
+            const newAssistantMessage: ChatMessage = { role: 'assistant', content: response };
+            setChatHistory(prev => [...prev, newAssistantMessage]);
+        } catch (error) {
+            console.error("Chatbot error:", error);
+            const errorMessage: ChatMessage = { role: 'error', content: '미안해요, 답변을 생성하는 데 문제가 생겼어요.' };
+            setChatHistory(prev => [...prev, errorMessage]);
+        } finally {
+            setIsChatLoading(false);
+        }
     };
 
     const addReason = () => setBody([...body, { reason: '', source: '' }]);
@@ -234,8 +362,6 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
             alert('최소 한 개의 근거는 필요합니다.');
         }
     };
-
-    const finalTopic = refinedTopic || topic;
 
     const generateFullText = useCallback(() => {
         const bodyText = body.map(part => part.reason).join('\n\n');
@@ -430,6 +556,22 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
 
     return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+            <button
+                onClick={() => setIsChatOpen(true)}
+                className="fixed bottom-6 right-6 z-30 w-16 h-16 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 flex items-center justify-center transition-transform hover:scale-110"
+                aria-label="AI 글쓰기 도우미 열기"
+            >
+                <ChatBubbleLeftRightIcon className="w-8 h-8" />
+            </button>
+            
+            <ChatModal
+                isOpen={isChatOpen}
+                onClose={() => setIsChatOpen(false)}
+                history={chatHistory}
+                isLoading={isChatLoading}
+                onSendMessage={handleSendMessage}
+            />
+
             <div className="max-w-4xl w-full mx-auto">
                 <div className="bg-white rounded-xl shadow-lg p-8">
                     <div className="flex justify-between items-start mb-6 border-b pb-4">
@@ -880,9 +1022,15 @@ const App: React.FC = () => {
         try {
             const data = await getAllEssays();
             setEssays(data);
-        } catch (err) {
-            setError('글 목록을 불러오는 데 실패했습니다.');
+        } catch (err: any) {
             console.error(err);
+            let message = '글 목록을 불러오는 데 실패했습니다.';
+            // Supabase paused projects often return fetch failures or specific error codes that act like network errors in the JS client.
+            // Since the user context specifically mentions this is likely due to inactivity/free tier, we prioritize this message.
+            if (err.message && (err.message.includes('fetch') || err.message.includes('network') || err.message.includes('503'))) {
+                 message = '데이터베이스 연결에 실패했습니다. Supabase 프로젝트가 "일시 정지(Paused)" 상태인지 확인해주세요. (무료 플랜은 일정 기간 미사용 시 정지됩니다)';
+            }
+            setError(message);
         } finally {
             setIsLoading(false);
         }
@@ -1088,7 +1236,28 @@ const App: React.FC = () => {
             return <div className="flex justify-center items-center h-screen"><LoadingSpinner size="w-12 h-12" /></div>;
         }
         if (error) {
-            return <div className="text-center text-red-500 p-8">{error}</div>;
+            return (
+                <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center space-y-4">
+                    <div className="text-red-500 text-xl font-bold">⚠️ 오류 발생</div>
+                    <p className="text-gray-700">{error}</p>
+                    <div className="flex gap-4 mt-4">
+                        <a 
+                            href="https://supabase.com/dashboard/projects" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+                        >
+                            Supabase 대시보드 확인하기
+                        </a>
+                        <button 
+                            onClick={fetchAllEssays}
+                            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-100"
+                        >
+                            다시 시도
+                        </button>
+                    </div>
+                </div>
+            );
         }
 
         switch (currentView) {

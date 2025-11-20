@@ -1,7 +1,8 @@
-학생들의 글과 댓글을 저장할 테이블을 생성하고, 데이터 접근 정책(RLS)을 설정합니다. 아래 코드 블록 안의 내용을 **모두** 복사하여 SQL Editor에 붙여넣고 실행해주세요.
-
-```sql
 -- START: 이 라인부터 복사를 시작하세요.
+
+-- =================================================================
+-- 1. 기존 테이블 설정 (Essays, Comments)
+-- =================================================================
 
 -- 기존 테이블이 존재하면 삭제합니다. (초기 설정 시 안전 장치)
 DROP TABLE IF EXISTS public.comments;
@@ -79,9 +80,48 @@ $$;
 GRANT EXECUTE ON FUNCTION increment_likes(UUID) TO anon;
 GRANT EXECUTE ON FUNCTION increment_likes(UUID) TO authenticated;
 
--- END: 이 라인까지 복사하세요.
-```
 
----
-## 2. API 키 설정 (참고)
-애플리케이션은 이미 올바른 API 키로 설정되어 있습니다. 이 섹션은 정보 제공용입니다.
+-- =================================================================
+-- 2. 교사 비밀번호 관리를 위한 설정 (신규 추가)
+-- =================================================================
+
+-- 기존 config 테이블이 있다면 삭제
+DROP TABLE IF EXISTS public.config;
+
+-- 설정값 저장 테이블 (config) 생성
+CREATE TABLE public.config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- config 테이블에 RLS 활성화
+ALTER TABLE public.config ENABLE ROW LEVEL SECURITY;
+
+-- 기본적으로 anon 사용자의 config 테이블 접근을 모두 차단 (중요!)
+CREATE POLICY "Deny all access to config" ON public.config
+FOR ALL TO anon USING (false) WITH CHECK (false);
+
+-- 초기 교사 비밀번호 설정. 이 비밀번호로 로그인 후 Supabase에서 직접 변경 가능합니다.
+INSERT INTO public.config (key, value) VALUES ('teacher_password', 'symphony99!');
+
+-- 비밀번호 검증을 위한 서버 측 함수 생성
+CREATE OR REPLACE FUNCTION verify_teacher_password(p_password TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.config
+    WHERE key = 'teacher_password' AND value = p_password
+  );
+END;
+$$;
+
+-- anon 사용자가 비밀번호 검증 함수를 호출할 수 있도록 권한 부여
+GRANT EXECUTE ON FUNCTION verify_teacher_password(TEXT) TO anon;
+GRANT EXECUTE ON FUNCTION verify_teacher_password(TEXT) TO authenticated;
+
+
+-- END: 이 라인까지 복사하세요.

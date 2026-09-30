@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { UserRole, type Student, type Essay, type EssayData, type BodyPart, type Comment } from './types';
-import { getTopicSuggestions, getWritingAssistantResponse } from './services/geminiService';
-import { isSupabaseConfigured, getAllEssays, addEssay, deleteEssay, incrementLike, getComments, addComment, findEssayByEditCode, updateEssay, verifyTeacherPassword } from './services/supabaseService';
+import { getAllEssays, addEssay, deleteEssay, incrementLike, getComments, addComment, findEssayByEditCode, updateEssay, loginTeacher, setAdminToken, getTopicSuggestions, getWritingAssistantResponse } from './services/api';
+import { GRADES } from './constants';
 import {
   UserIcon, TeacherIcon, SparklesIcon, PlusIcon, TrashIcon,
   ChevronRightIcon, ChevronLeftIcon, CheckCircleIcon, ArrowLeftIcon, HeartIcon, ChatBubbleIcon, XIcon, ChatBubbleLeftRightIcon
@@ -38,30 +38,6 @@ interface ChatMessage {
 
 // ---------- VIEWS / MAJOR COMPONENTS ----------
 
-const SupabaseSetupNeeded: React.FC = () => (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 p-4">
-        <div className="w-full max-w-2xl p-8 space-y-6 bg-white rounded-xl shadow-lg border-2 border-red-200">
-            <h2 className="text-3xl font-bold text-center text-red-700">🚨 Supabase 설정이 필요합니다 🚨</h2>
-            <p className="text-center text-gray-700">
-                애플리케이션이 데이터베이스에 연결할 수 없습니다. 계속하려면 Supabase 프로젝트를 설정하고
-                API 키를 입력해야 합니다.
-            </p>
-            <div className="space-y-4 text-left p-6 bg-gray-50 rounded-lg">
-                <h3 className="font-semibold text-lg text-gray-800">설정 방법:</h3>
-                <ol className="list-decimal list-inside space-y-2 text-gray-600">
-                    <li><a href="https://supabase.com/" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline font-semibold">Supabase</a>에 가입하고 새 프로젝트를 만드세요.</li>
-                    <li>프로젝트 대시보드에서 <strong>SQL Editor</strong>로 이동하여 <code>supabase_setup.md</code> 파일의 SQL 코드를 실행하세요.</li>
-                    <li>프로젝트 대시보드의 <strong>Project Settings &gt; API</strong>에서 <strong>Project URL</strong>과 <strong>Project API Keys</strong>의 <code>anon</code> <code>public</code> 키를 복사하세요.</li>
-                    <li><code>constants.ts</code> 파일을 열고 복사한 URL과 키를 <code>SUPABASE_URL</code>과 <code>SUPABASE_ANON_KEY</code> 변수에 붙여넣으세요.</li>
-                </ol>
-            </div>
-            <p className="text-center text-sm text-gray-500 pt-4">
-                설정을 완료한 후 페이지를 새로고침 해주세요.
-            </p>
-        </div>
-    </div>
-);
-
 const LandingPage: React.FC<{ onSelectRole: (role: UserRole) => void }> = ({ onSelectRole }) => (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-indigo-50 to-white p-4">
         <div className="text-center mb-12">
@@ -83,18 +59,18 @@ const LandingPage: React.FC<{ onSelectRole: (role: UserRole) => void }> = ({ onS
 
 
 const StudentInfoForm: React.FC<{ onStart: (info: Student) => void; onBack: () => void; }> = ({ onStart, onBack }) => {
-    const [info, setInfo] = useState({ grade: '6', classNumber: '', studentId: '', name: '' });
+    const [info, setInfo] = useState({ grade: '', classNumber: '', studentId: '', name: '' });
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (info.classNumber && info.studentId && info.name) {
-            onStart(info);
+        if (info.grade && info.classNumber && info.studentId && info.name.trim()) {
+            onStart({ ...info, name: info.name.trim() });
         } else {
-            alert('모든 정보를 입력해주세요.');
+            alert('학년, 반, 번호, 이름을 모두 입력해주세요.');
         }
     };
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setInfo({ ...info, [e.target.name]: e.target.value });
     };
 
@@ -106,20 +82,23 @@ const StudentInfoForm: React.FC<{ onStart: (info: Student) => void; onBack: () =
                     <div className="grid grid-cols-3 gap-4">
                         <div>
                             <label htmlFor="grade" className="block text-sm font-medium text-gray-700">학년</label>
-                            <input type="text" id="grade" name="grade" value={info.grade} readOnly className="mt-1 block w-full px-3 py-2 bg-gray-100 border border-gray-300 rounded-md shadow-sm focus:outline-none sm:text-sm" />
+                            <select id="grade" name="grade" value={info.grade} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                                <option value="" disabled>선택</option>
+                                {GRADES.map(g => <option key={g} value={g}>{g}학년</option>)}
+                            </select>
                         </div>
                         <div>
                             <label htmlFor="classNumber" className="block text-sm font-medium text-gray-700">반</label>
-                            <input type="number" id="classNumber" name="classNumber" value={info.classNumber} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                            <input type="number" min={1} max={99} id="classNumber" name="classNumber" value={info.classNumber} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                         </div>
                         <div>
                             <label htmlFor="studentId" className="block text-sm font-medium text-gray-700">번호</label>
-                            <input type="number" id="studentId" name="studentId" value={info.studentId} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                            <input type="number" min={1} max={99} id="studentId" name="studentId" value={info.studentId} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                         </div>
                     </div>
                     <div>
                         <label htmlFor="name" className="block text-sm font-medium text-gray-700">이름</label>
-                        <input type="text" id="name" name="name" value={info.name} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
+                        <input type="text" maxLength={30} id="name" name="name" value={info.name} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" />
                     </div>
                      <div className="flex flex-col-reverse sm:flex-row gap-2">
                         <button type="button" onClick={onBack} className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
@@ -137,6 +116,7 @@ const StudentInfoForm: React.FC<{ onStart: (info: Student) => void; onBack: () =
 
 
 const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ onLogin, onBack }) => {
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -146,15 +126,15 @@ const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ 
         setIsLoading(true);
         setError('');
         try {
-            const isValid = await verifyTeacherPassword(password);
+            const isValid = await loginTeacher(username.trim(), password);
             if (isValid) {
                 onLogin();
             } else {
-                setError('비밀번호가 올바르지 않습니다.');
+                setError('아이디 또는 비밀번호가 올바르지 않습니다.');
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            setError('로그인 중 오류가 발생했습니다. 다시 시도해주세요.');
+            setError(err?.message || '로그인 중 오류가 발생했습니다. 다시 시도해주세요.');
         } finally {
             setIsLoading(false);
         }
@@ -164,13 +144,32 @@ const TeacherLogin: React.FC<{ onLogin: () => void; onBack: () => void; }> = ({ 
         <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4">
             <div className="w-full max-w-sm p-8 space-y-6 bg-white rounded-xl shadow-lg">
                 <h2 className="text-2xl font-bold text-center text-gray-800">선생님 로그인</h2>
-                <form onSubmit={handleSubmit} className="space-y-6">
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label htmlFor="username-teacher" className="sr-only">아이디</label>
+                        <input
+                            id="username-teacher"
+                            name="username"
+                            type="text"
+                            autoComplete="username"
+                            autoCapitalize="none"
+                            value={username}
+                            onChange={(e) => {
+                                setUsername(e.target.value);
+                                if (error) setError('');
+                            }}
+                            required
+                            className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            placeholder="아이디"
+                        />
+                    </div>
                     <div>
                         <label htmlFor="password-teacher" className="sr-only">비밀번호</label>
                         <input
                             id="password-teacher"
                             name="password"
                             type="password"
+                            autoComplete="current-password"
                             value={password}
                             onChange={(e) => {
                                 setPassword(e.target.value);
@@ -279,7 +278,7 @@ const ChatModal: React.FC<{
 interface WritingWizardProps {
     student: Student;
     onBackToGallery: () => void;
-    onComplete?: (essay: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => void;
+    onComplete?: (essay: Omit<Essay, 'id' | 'createdAt' | 'likes' | 'editCode'>) => void;
     initialData?: Essay | null;
     onUpdate?: (updates: EssayData) => void;
 }
@@ -314,7 +313,7 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
         setIsRefining(true);
         setRefinedTopic('');
         setTopicSuggestions([]);
-        const result = await getTopicSuggestions(topic);
+        const result = await getTopicSuggestions(topic, student.grade);
         setRefinedTopic(result.refinedTopic);
         setTopicSuggestions(result.suggestions);
         setIsRefining(false);
@@ -335,7 +334,7 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
         };
 
         try {
-            const response = await getWritingAssistantResponse(context, message);
+            const response = await getWritingAssistantResponse(context, message, student.grade);
             const newAssistantMessage: ChatMessage = { role: 'assistant', content: response };
             setChatHistory(prev => [...prev, newAssistantMessage]);
         } catch (error) {
@@ -393,11 +392,10 @@ const WritingWizard: React.FC<WritingWizardProps> = (props) => {
         if (isEditMode && onUpdate) {
             onUpdate(essayData);
         } else if (onComplete) {
-            const editCode = Math.random().toString(36).substring(2, 8);
+            // 수정 코드는 서버가 만들어서 돌려줍니다.
             onComplete({
                 ...essayData,
                 student,
-                editCode,
             });
         }
     };
@@ -635,7 +633,30 @@ const GalleryView: React.FC<{
     isAdmin: boolean;
     likedEssayIds: Set<string>;
     onGoHome: () => void;
-}> = ({ essays, onSelectEssay, onNewEssay, onModifyEssay, onDeleteEssay, isAdmin, likedEssayIds, onGoHome }) => (
+    initialGrade?: string;
+    initialClass?: string;
+}> = ({ essays, onSelectEssay, onNewEssay, onModifyEssay, onDeleteEssay, isAdmin, likedEssayIds, onGoHome, initialGrade = '', initialClass = '' }) => {
+    // 학년·반 필터 (학생은 처음에 자기 학년·반으로 보여줌)
+    const [gradeFilter, setGradeFilter] = useState(initialGrade);
+    const [classFilter, setClassFilter] = useState(initialClass);
+
+    const classOptions = useMemo(() => {
+        const set = new Set<string>();
+        essays.forEach(e => {
+            if (!gradeFilter || e.student.grade === gradeFilter) set.add(e.student.classNumber);
+        });
+        if (classFilter) set.add(classFilter);
+        return Array.from(set).sort((a, b) => Number(a) - Number(b));
+    }, [essays, gradeFilter, classFilter]);
+
+    const filteredEssays = useMemo(() => essays.filter(e =>
+        (!gradeFilter || e.student.grade === gradeFilter) &&
+        (!classFilter || e.student.classNumber === classFilter)
+    ), [essays, gradeFilter, classFilter]);
+
+    const isFiltered = !!(gradeFilter || classFilter);
+
+    return (
     <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
             <div>
@@ -663,8 +684,38 @@ const GalleryView: React.FC<{
                 </button>
             </div>
         </header>
+        <div className="flex flex-wrap items-center gap-2 mb-6 p-3 bg-white rounded-lg shadow-sm border border-gray-200">
+            <span className="text-sm font-medium text-gray-700 mr-1">보기:</span>
+            <select
+                value={gradeFilter}
+                onChange={e => { setGradeFilter(e.target.value); setClassFilter(''); }}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                aria-label="학년 선택"
+            >
+                <option value="">전체 학년</option>
+                {GRADES.map(g => <option key={g} value={g}>{g}학년</option>)}
+            </select>
+            <select
+                value={classFilter}
+                onChange={e => setClassFilter(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                aria-label="반 선택"
+            >
+                <option value="">전체 반</option>
+                {classOptions.map(c => <option key={c} value={c}>{c}반</option>)}
+            </select>
+            {isFiltered && (
+                <button
+                    onClick={() => { setGradeFilter(''); setClassFilter(''); }}
+                    className="px-3 py-1.5 text-sm text-gray-600 hover:text-indigo-600 hover:underline"
+                >
+                    전체 보기
+                </button>
+            )}
+            <span className="ml-auto text-sm text-gray-500">{filteredEssays.length}편</span>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {essays.map(essay => (
+            {filteredEssays.map(essay => (
                 <EssayCard
                     key={essay.id}
                     essay={essay}
@@ -675,14 +726,17 @@ const GalleryView: React.FC<{
                 />
             ))}
         </div>
-        {essays.length === 0 && (
+        {filteredEssays.length === 0 && (
             <div className="text-center py-12 bg-white rounded-lg shadow-md">
-                <h3 className="text-xl font-semibold text-gray-800">아직 등록된 글이 없어요.</h3>
+                <h3 className="text-xl font-semibold text-gray-800">
+                    {isFiltered ? '선택한 학년·반에는 아직 글이 없어요.' : '아직 등록된 글이 없어요.'}
+                </h3>
                 <p className="mt-2 text-gray-500">첫 번째 글을 작성해서 갤러리를 채워보세요!</p>
             </div>
         )}
     </div>
-);
+    );
+};
 
 
 const WritingSuccessView: React.FC<{ essay: Essay; onFinish: () => void; }> = ({ essay, onFinish }) => {
@@ -727,7 +781,7 @@ const CommentForm: React.FC<{
     isAdmin: boolean;
 }> = ({ onSubmit, studentInfo, isAdmin }) => {
     const [content, setContent] = useState('');
-    const [author, setAuthor] = useState({ grade: '6', classNumber: '', studentId: '', name: '' });
+    const [author, setAuthor] = useState({ grade: '', classNumber: '', studentId: '', name: '' });
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
@@ -738,13 +792,13 @@ const CommentForm: React.FC<{
         }
     }, [studentInfo, isAdmin]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setAuthor({ ...author, [e.target.name]: e.target.value });
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!content.trim() || !author.name.trim() || !author.classNumber.trim() || !author.studentId.trim()) {
+        if (!content.trim() || !author.name.trim() || !author.grade || !author.classNumber.trim() || !author.studentId.trim()) {
             alert('정보와 댓글 내용을 모두 입력해주세요.');
             return;
         }
@@ -757,8 +811,8 @@ const CommentForm: React.FC<{
                 name: author.name,
             });
             setContent('');
-        } catch (error) {
-            alert('댓글 작성 중 오류가 발생했습니다.');
+        } catch (error: any) {
+            alert(error?.message || '댓글 작성 중 오류가 발생했습니다.');
         } finally {
             setIsSubmitting(false);
         }
@@ -769,7 +823,14 @@ const CommentForm: React.FC<{
     return (
         <form onSubmit={handleSubmit} className="border-t pt-6">
             <div className={`grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3 ${isAuthorInfoReadOnly ? 'opacity-70' : ''}`}>
-                 <input type="text" value={author.grade} readOnly className="col-span-1 sm:col-span-1 block w-full px-2 py-1.5 bg-gray-100 border border-gray-300 rounded-md text-sm" placeholder="학년"/>
+                 {isAdmin ? (
+                     <input type="text" value="-" readOnly className="col-span-1 sm:col-span-1 block w-full px-2 py-1.5 bg-gray-100 border border-gray-300 rounded-md text-sm" aria-label="학년"/>
+                 ) : (
+                     <select name="grade" value={author.grade} onChange={handleChange} required disabled={isAuthorInfoReadOnly} aria-label="학년" className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : 'bg-white'}`}>
+                         <option value="" disabled>학년</option>
+                         {GRADES.map(g => <option key={g} value={g}>{g}학년</option>)}
+                     </select>
+                 )}
                  <input type="number" name="classNumber" value={author.classNumber} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="반"/>
                  <input type="number" name="studentId" value={author.studentId} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="번호"/>
                  <input type="text" name="name" value={author.name} onChange={handleChange} required readOnly={isAuthorInfoReadOnly} className={`col-span-1 sm:col-span-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md text-sm ${isAuthorInfoReadOnly ? 'bg-gray-100' : ''}`} placeholder="이름"/>
@@ -865,7 +926,7 @@ const EssayDetailView: React.FC<{
                             <div key={comment.id} className="p-4 bg-gray-50 rounded-lg">
                                 <p className="text-gray-800 whitespace-pre-wrap">{comment.content}</p>
                                 <p className="text-xs text-gray-500 mt-2">
-                                    {comment.authorName === '선생님' ? '선생님' : `${comment.authorGrade}학년 ${comment.authorClass}반 ${comment.authorNumber}번 ${comment.authorName}`}
+                                    {(comment.isTeacher || comment.authorGrade === 0) ? '선생님' : `${comment.authorGrade}학년 ${comment.authorClass}반 ${comment.authorNumber}번 ${comment.authorName}`}
                                     <span className="mx-2">•</span>
                                     {new Date(comment.createdAt).toLocaleString()}
                                 </p>
@@ -949,9 +1010,9 @@ const FoundEssayActionsView: React.FC<{
 }> = ({ essay, onEdit, onDelete, onCancel }) => {
 
     const handleDelete = () => {
-        // The sandbox environment blocks `window.confirm`, so it was removed.
-        // Deletion is now immediate upon click.
-        onDelete();
+        if (window.confirm('이 글을 삭제할까요? 삭제하면 되돌릴 수 없어요.')) {
+            onDelete();
+        }
     };
 
     return (
@@ -1024,13 +1085,7 @@ const App: React.FC = () => {
             setEssays(data);
         } catch (err: any) {
             console.error(err);
-            let message = '글 목록을 불러오는 데 실패했습니다.';
-            // Supabase paused projects often return fetch failures or specific error codes that act like network errors in the JS client.
-            // Since the user context specifically mentions this is likely due to inactivity/free tier, we prioritize this message.
-            if (err.message && (err.message.includes('fetch') || err.message.includes('network') || err.message.includes('503'))) {
-                 message = '데이터베이스 연결에 실패했습니다. Supabase 프로젝트가 "일시 정지(Paused)" 상태인지 확인해주세요. (무료 플랜은 일정 기간 미사용 시 정지됩니다)';
-            }
-            setError(message);
+            setError(err?.message || '글 목록을 불러오는 데 실패했습니다.');
         } finally {
             setIsLoading(false);
         }
@@ -1071,6 +1126,8 @@ const App: React.FC = () => {
         setUserRole(null);
         setStudentInfo(null);
         setIsAdmin(false);
+        setAdminToken(null);
+        setError(null);
     };
 
     const handleStudentStart = (info: Student) => {
@@ -1096,7 +1153,7 @@ const App: React.FC = () => {
         setCurrentView('gallery');
     };
 
-    const handleWritingComplete = async (essayData: Omit<Essay, 'id' | 'createdAt' | 'likes'>) => {
+    const handleWritingComplete = async (essayData: Omit<Essay, 'id' | 'createdAt' | 'likes' | 'editCode'>) => {
         setIsLoading(true);
         try {
             const newEssay = await addEssay(essayData);
@@ -1111,7 +1168,7 @@ const App: React.FC = () => {
     };
     
     const handleWritingUpdate = async (essayData: EssayData) => {
-        if (!essayToEdit) return;
+        if (!essayToEdit?.editCode) return;
         setIsLoading(true);
         try {
             await updateEssay(essayToEdit.editCode, essayData);
@@ -1162,14 +1219,17 @@ const App: React.FC = () => {
         setCurrentView('gallery');
     };
     
-    const handleDeleteEssay = async (id: string) => {
+    // 선생님은 로그인 토큰으로, 학생은 수정 코드로 삭제합니다.
+    const handleDeleteEssay = async (id: string, editCode?: string): Promise<boolean> => {
         setIsLoading(true);
         try {
-            await deleteEssay(id);
+            await deleteEssay(id, editCode);
             setEssays(prev => prev.filter(e => e.id !== id));
+            return true;
         } catch (err: any) {
             alert(`글 삭제에 실패했습니다: ${err.message}`);
             console.error(err);
+            return false;
         } finally {
             setIsLoading(false);
         }
@@ -1226,8 +1286,8 @@ const App: React.FC = () => {
 
     const handleDeleteFoundEssay = async () => {
         if (essayToEdit) {
-            await handleDeleteEssay(essayToEdit.id);
-            handleBackToGallery(); // 삭제 후 갤러리로 이동
+            const deleted = await handleDeleteEssay(essayToEdit.id, essayToEdit.editCode);
+            if (deleted) handleBackToGallery(); // 삭제 후 갤러리로 이동
         }
     };
 
@@ -1241,17 +1301,15 @@ const App: React.FC = () => {
                     <div className="text-red-500 text-xl font-bold">⚠️ 오류 발생</div>
                     <p className="text-gray-700">{error}</p>
                     <div className="flex gap-4 mt-4">
-                        <a 
-                            href="https://supabase.com/dashboard/projects" 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
-                        >
-                            Supabase 대시보드 확인하기
-                        </a>
-                        <button 
-                            onClick={fetchAllEssays}
+                        <button
+                            onClick={handleBackToLanding}
                             className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-100"
+                        >
+                            처음으로
+                        </button>
+                        <button
+                            onClick={fetchAllEssays}
+                            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
                         >
                             다시 시도
                         </button>
@@ -1291,10 +1349,12 @@ const App: React.FC = () => {
                     onSelectEssay={handleSelectEssay}
                     onNewEssay={handleStartWriting}
                     onModifyEssay={handleStartModify}
-                    onDeleteEssay={handleDeleteEssay}
+                    onDeleteEssay={async (id) => { await handleDeleteEssay(id); }}
                     isAdmin={isAdmin}
                     likedEssayIds={likedEssayIds}
                     onGoHome={handleBackToLanding}
+                    initialGrade={studentInfo?.grade || ''}
+                    initialClass={studentInfo?.classNumber || ''}
                 />;
             case 'detail':
                 if (!selectedEssay) {
@@ -1328,10 +1388,6 @@ const App: React.FC = () => {
                 return <LandingPage onSelectRole={handleSelectRole} />;
         }
     };
-
-    if (!isSupabaseConfigured) {
-        return <SupabaseSetupNeeded />;
-    }
 
     return <div className="bg-gray-50 min-h-screen">{renderContent()}</div>;
 };

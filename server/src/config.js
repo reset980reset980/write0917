@@ -1,0 +1,25 @@
+import 'dotenv/config';
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`환경 변수 ${name} 가 설정되지 않았습니다. server/.env 를 확인하세요.`);
+  }
+  return value;
+}
+
+export const config = {
+  port: Number(process.env.PORT || 3917),
+  host: process.env.HOST || '127.0.0.1',
+  databaseUrl: required('DATABASE_URL'),
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'https://write0917.vercel.app')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  adminUsername: required('ADMIN_USERNAME'),
+  adminPasswordHash: required('ADMIN_PASSWORD_HASH'),
+  tokenSecret: required('TOKEN_SECRET'),
+  tokenTtlHours: Number(process.env.TOKEN_TTL_HOURS || 12),
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+};

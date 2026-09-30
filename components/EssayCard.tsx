@@ -14,9 +14,7 @@ interface EssayCardProps {
 const EssayCard: React.FC<EssayCardProps> = ({ essay, onSelect, isAdmin = false, onDelete, isLiked = false }) => {
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
-    // The sandbox environment blocks `window.confirm`, so it was removed.
-    // Deletion is now immediate upon click.
-    if (onDelete) {
+    if (onDelete && window.confirm(`"${essay.topic}" 글을 삭제할까요? 삭제하면 되돌릴 수 없어요.`)) {
       onDelete(essay.id);
     }
   };
@@ -43,7 +41,7 @@ const EssayCard: React.FC<EssayCardProps> = ({ essay, onSelect, isAdmin = false,
         <p className="text-gray-600 text-sm line-clamp-3 h-16">{essay.introduction}</p>
       </div>
       <div className="mt-4">
-        {isAdmin && (
+        {isAdmin && essay.editCode && (
             <div className="mb-3 pt-3 border-t border-gray-100">
                 <p className="text-xs text-gray-600 font-mono bg-gray-100 px-2 py-1 rounded-md inline-block">
                     수정 코드: <span className="font-bold text-indigo-700">{essay.editCode}</span>

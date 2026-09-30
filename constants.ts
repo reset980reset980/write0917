@@ -1,6 +1,7 @@
+// 미니PC API 서버 주소
+// 다른 주소로 바꾸려면 Vercel 환경 변수 VITE_API_BASE_URL 을 설정하세요.
+export const API_BASE_URL: string =
+  (import.meta as any).env?.VITE_API_BASE_URL || 'https://write-api.xsw.kr';
 
-// --- Supabase 설정 ---
-// 아래 값을 실제 Supabase 프로젝트의 URL과 anon key로 교체해주세요.
-// Supabase 프로젝트 대시보드의 'Project Settings' > 'API'에서 찾을 수 있습니다.
-export const SUPABASE_URL = 'https://swtmgkrbydhxfxqztamh.supabase.co';
-export const SUPABASE_ANON_KEY = 'sb_publishable_zxuWvqpbNlaGpIr1qaGMiA_q7cyM26i';
+// 학생이 고를 수 있는 학년
+export const GRADES = ['1', '2', '3', '4', '5', '6'];

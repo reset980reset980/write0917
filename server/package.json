@@ -1,0 +1,23 @@
+{
+  "name": "write0917-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "주장하는 글쓰기 도우미 API 서버 (미니PC · PostgreSQL)",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js",
+    "hash-password": "node src/hashPassword.js"
+  },
+  "dependencies": {
+    "@google/genai": "^1.20.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

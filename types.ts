@@ -28,7 +28,7 @@ export interface Essay extends EssayData {
   id: string; // uuid
   createdAt: string; // timestamp string
   student: Student;
-  editCode: string;
+  editCode?: string; // 작성자 본인(수정 코드 입력 후)과 선생님에게만 내려옵니다
   likes: number;
 }
 
@@ -41,4 +41,5 @@ export interface Comment {
   authorClass: number;
   authorNumber: number;
   content: string;
+  isTeacher?: boolean;
 }

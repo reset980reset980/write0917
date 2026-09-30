@@ -850,7 +850,7 @@ const ChatPanel: React.FC<{
             return;
         }
         try {
-            const answer = await getWritingAssistantResponse(context, q, grade);
+            const answer = await getWritingAssistantResponse(context, q, grade, step);
             setHistory((h) => [...h, { role: 'assistant', content: answer }]);
         } catch (err: any) {
             setHistory((h) => [...h, { role: 'error', content: err?.message || '답을 만들지 못했어요. 잠시 뒤 다시 물어봐 주세요.' }]);

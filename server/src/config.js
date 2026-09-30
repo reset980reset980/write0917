@@ -23,5 +23,10 @@ export const config = {
   // '로그인 상태 유지'를 켰을 때 유효 기간 (일)
   rememberDays: Number(process.env.REMEMBER_DAYS || 30),
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  // 첫 번째로 쓸 모델, 한도가 차면 뒤의 모델로 자동 전환
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+  geminiFallbackModels: (process.env.GEMINI_FALLBACK_MODELS || 'gemini-flash-lite-latest,gemini-3.1-flash-lite,gemini-2.5-flash-lite,gemini-2.5-flash')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };

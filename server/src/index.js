@@ -4,7 +4,7 @@ import cors from 'cors';
 import { config } from './config.js';
 import { pool, query } from './db.js';
 import { checkAdminCredentials, issueToken, isAdminRequest, requireAdmin } from './auth.js';
-import { isAiConfigured, getTopicSuggestions, getWritingAssistantResponse } from './ai.js';
+import { isAiConfigured, getTopicSuggestions, getWritingAssistantResponse, offlineAnswer, AiUnavailableError } from './ai.js';
 import { rateLimit } from './rateLimit.js';
 
 const app = express();
@@ -343,9 +343,13 @@ app.post('/api/ai/topic-suggestions', aiLimiter, wrap(async (req, res) => {
     res.json(await getTopicSuggestions(topic, req.body?.grade));
   } catch (err) {
     console.error('[ai] topic-suggestions', err.message);
+    const quota = err instanceof AiUnavailableError && err.reason === 'quota';
     res.json({
-      refinedTopic: 'AI 추천 주제 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.',
+      refinedTopic: quota
+        ? '오늘은 AI 요정이 주제를 다듬어 줄 수 있는 횟수를 다 썼어요. "~해야 한다", "~하자"로 끝나게 스스로 다듬어 보세요!'
+        : 'AI 요정이 지금 바빠요. 잠시 뒤 다시 눌러 주세요.',
       suggestions: [],
+      unavailable: true,
     });
   }
 }));
@@ -364,7 +368,8 @@ app.post('/api/ai/assistant', aiLimiter, wrap(async (req, res) => {
     res.json({ answer: await getWritingAssistantResponse(context, question, req.body?.grade) });
   } catch (err) {
     console.error('[ai] assistant', err.message);
-    res.json({ answer: 'AI 조수와 대화하는 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.' });
+    const reason = err instanceof AiUnavailableError ? err.reason : 'busy';
+    res.json({ answer: offlineAnswer(reason, Number(req.body?.step) || 2), unavailable: true });
   }
 }));
 

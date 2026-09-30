@@ -159,10 +159,11 @@ export async function getWritingAssistantResponse(
     context: { topic: string; introduction: string; body: string; conclusion: string },
     question: string,
     grade?: string,
+    step?: number,
 ): Promise<string> {
     const { answer } = await request<{ answer: string }>('/api/ai/assistant', {
         method: 'POST',
-        json: { context, question, grade },
+        json: { context, question, grade, step },
     });
     return answer;
 }

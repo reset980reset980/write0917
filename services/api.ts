@@ -99,17 +99,33 @@ export function getComments(essayId: string): Promise<Comment[]> {
     return request<Comment[]>(`/api/essays/${essayId}/comments`);
 }
 
+// 댓글 삭제 (선생님만)
+export function deleteComment(commentId: string): Promise<{ success: boolean }> {
+    return request<{ success: boolean }>(`/api/comments/${commentId}`, { method: 'DELETE' });
+}
+
+// 저장해 둔 선생님 토큰이 아직 유효한지 확인
+export async function verifyAdminToken(): Promise<boolean> {
+    if (!adminToken) return false;
+    try {
+        await request('/api/admin/me');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 // 선생님 로그인 (성공하면 토큰 저장)
-export async function loginTeacher(username: string, password: string): Promise<boolean> {
+export async function loginTeacher(username: string, password: string): Promise<string | null> {
     try {
         const { token } = await request<{ token: string }>('/api/admin/login', {
             method: 'POST',
             json: { username, password },
         });
         setAdminToken(token);
-        return true;
+        return token;
     } catch (err) {
-        if (err instanceof ApiError && err.status === 401) return false;
+        if (err instanceof ApiError && err.status === 401) return null;
         throw err;
     }
 }

@@ -278,6 +278,14 @@ app.post('/api/essays/:id/comments', writeLimiter, wrap(async (req, res) => {
   }
 }));
 
+// 댓글 삭제 (선생님만)
+app.delete('/api/comments/:id', requireAdmin, wrap(async (req, res) => {
+  if (!isUuid(req.params.id)) throw new BadRequest('잘못된 댓글 번호입니다.');
+  const result = await query('DELETE FROM comments WHERE id = $1', [req.params.id]);
+  if (!result.rowCount) return res.status(404).json({ error: '댓글을 찾을 수 없습니다.' });
+  res.json({ success: true });
+}));
+
 // 선생님 로그인
 app.post('/api/admin/login', loginLimiter, (req, res) => {
   const { username, password } = req.body || {};

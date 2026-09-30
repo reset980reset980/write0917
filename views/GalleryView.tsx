@@ -1,8 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { BookOpen, Download, KeyRound, PenLine, RotateCcw, Search, Users, X } from 'lucide-react';
+import { BookOpen, Download, KeyRound, PenLine, Pin, RotateCcw, Search, Settings2, Users, X, ChevronRight } from 'lucide-react';
+import { ModelEssayModal } from '../components/ModelEssay';
+import { MODEL_ESSAY } from '../modelEssay';
+import { WritingSettingsModal } from './SettingsModal';
 import type { Essay, Student } from '../types';
 import { GRADES } from '../constants';
-import { Button, EmptyState, Input, Select, Spinner, cx } from '../components/ui';
+import { Badge, Button, EmptyState, Input, Select, Spinner, cx } from '../components/ui';
 import EssayCard from '../components/EssayCard';
 import { downloadEssaysCsv } from '../utils';
 import { Tour, useTour, type TourStep } from '../components/Tour';
@@ -28,6 +31,8 @@ export const GalleryView: React.FC<{
     const [grade, setGrade] = useState(student?.grade || '');
     const [cls, setCls] = useState(student?.classNumber || '');
     const [query, setQuery] = useState('');
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [modelOpen, setModelOpen] = useState(false);
 
     const classOptions = useMemo(() => {
         const set = new Set<string>();
@@ -87,6 +92,11 @@ export const GalleryView: React.FC<{
             body: <>학년·반을 바꾸거나, <b>주제·이름</b>으로 친구 글을 찾을 수 있어요.</>,
         },
         {
+            target: 'model-card',
+            title: '먼저 예시 글을 살펴봐요',
+            body: <>모든 반에 똑같이 보이는 <b>예시 글</b>이에요. 서론·근거·출처·결론이 어떻게 짜여 있는지 색으로 보여 줘요.</>,
+        },
+        {
             target: 'essay-card',
             skipIfMissing: true,
             title: '카드를 누르면 글을 읽어요',
@@ -128,6 +138,11 @@ export const GalleryView: React.FC<{
             body: <>학생이 코드를 잊어버리면 카드 아래 <b>수정 코드</b>를 알려 주세요. 휴지통으로 글을 지울 수 있어요.</>,
         },
         {
+            target: 'settings',
+            title: '글쓰기 설정',
+            body: <>서론·결론 <b>최소 글자 수</b>를 정하고, 학생에게 <b>남은 글자 수</b>를 보여줄지 켜고 끌 수 있어요.</>,
+        },
+        {
             target: 'export',
             title: '엑셀로 내려받기',
             body: <>지금 보이는 글을 표로 받아요. 평가나 <b>생활기록부</b> 쓸 때 활용해 보세요.</>,
@@ -153,6 +168,10 @@ export const GalleryView: React.FC<{
                 </div>
                 <div className="flex flex-wrap gap-2">
                     {isAdmin ? (
+                        <>
+                        <Button variant="secondary" icon={<Settings2 className="size-4" />} onClick={() => setSettingsOpen(true)} data-tour="settings">
+                            글쓰기 설정
+                        </Button>
                         <Button
                             variant="secondary"
                             icon={<Download className="size-4" />}
@@ -162,6 +181,7 @@ export const GalleryView: React.FC<{
                         >
                             {filtered ? '보이는 글' : '전체'} 엑셀로 받기
                         </Button>
+                        </>
                     ) : (
                         <>
                             <Button variant="secondary" icon={<KeyRound className="size-4" />} onClick={onFindByCode} data-tour="find-code">
@@ -271,6 +291,30 @@ export const GalleryView: React.FC<{
                 </div>
             </div>
 
+            {/* 모든 반 공통 예시 글 (고정 · 삭제 불가 · 필터와 상관없이 항상 보임) */}
+            {tab === 'all' && (
+                <button
+                    type="button"
+                    onClick={() => setModelOpen(true)}
+                    data-tour="model-card"
+                    className="group mt-6 flex w-full items-center gap-4 rounded-card border border-sun-400/40 bg-gradient-to-r from-sun-50 to-white p-4 text-left shadow-card transition-all hover:-translate-y-0.5 hover:shadow-lift sm:p-5"
+                >
+                    <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-sun-400 text-white">
+                        <BookOpen className="size-6" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                            <Badge tone="sun">
+                                <Pin className="size-3" /> 모든 반 공통 예시 글
+                            </Badge>
+                        </span>
+                        <span className="mt-1 block truncate text-[17px] font-bold text-ink-900">{MODEL_ESSAY.topic}</span>
+                        <span className="block text-sm text-ink-500">서론·근거·출처·결론이 어떻게 짜여 있는지 살펴봐요</span>
+                    </span>
+                    <ChevronRight className="size-5 shrink-0 text-ink-400 transition-transform group-hover:translate-x-1" />
+                </button>
+            )}
+
             {/* 목록 */}
             <div className="mt-6">
                 {loading && !essays.length ? (
@@ -346,6 +390,8 @@ export const GalleryView: React.FC<{
                 )}
             </div>
 
+            {isAdmin && <WritingSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
+            <ModelEssayModal open={modelOpen} onClose={() => setModelOpen(false)} />
             <Tour
                 steps={isAdmin ? teacherSteps : studentSteps}
                 running={tour.running}

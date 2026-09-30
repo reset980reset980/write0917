@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ArrowLeft, Bot, Check, ChevronLeft, ChevronRight, CloudCheck, Lightbulb, Link2, Plus, Send, Sparkles, Trash2, X,
+    ArrowLeft, BookOpen, Bot, Check, ChevronLeft, ChevronRight, CloudCheck, Lightbulb, Link2, Plus, Send, Sparkles, Trash2, X,
 } from 'lucide-react';
-import type { BodyPart, Essay, EssayData, Student } from '../types';
+import { DEFAULT_WRITING_SETTINGS, type BodyPart, type Essay, type EssayData, type Student, type WritingSettings } from '../types';
+import { CharGoal } from './SettingsModal';
 import { Badge, Button, Card, IconButton, Input, Linkify, Textarea, cx, useFeedback } from '../components/ui';
 import { getTopicSuggestions, getWritingAssistantResponse } from '../services/api';
 import { draftStore, type Draft } from '../storage';
 import { countChars, relativeTime, studentLabel } from '../utils';
 import { Tour, useTour, type TourStep } from '../components/Tour';
+import { ModelEssayModal } from '../components/ModelEssay';
 
-const MIN_LEN = 100;
 
 const STEPS = [
     { n: 1, title: '주제 정하기', short: '주제' },
@@ -18,6 +19,54 @@ const STEPS = [
 ];
 
 const partsKeyOf = (intro: string, body: BodyPart[], concl: string) => JSON.stringify([intro, body.map((b) => b.reason), concl]);
+
+/** 따라하기(연습)에서 쓰는 고정 예시. 실제 AI를 부르지 않고, 글도 올라가지 않음 */
+const PRACTICE = {
+    topic: '쉬는 시간에 스마트폰을 쓰지 말자',
+    refined: '쉬는 시간에는 스마트폰 대신 친구와 함께 놀아야 한다',
+    others: [
+        '학교에서는 스마트폰을 사물함에 보관해야 한다',
+        '하루 스마트폰 사용 시간을 스스로 정하자',
+        '쉬는 시간 놀이를 반 친구들과 함께 만들자',
+    ],
+    introduction:
+        '요즘 쉬는 시간이 되면 많은 친구들이 자리에 앉아 스마트폰만 봅니다. 예전처럼 운동장에서 뛰어놀거나 친구와 이야기하는 모습은 점점 줄어들고 있습니다. 저는 쉬는 시간에는 스마트폰 대신 친구와 함께 놀아야 한다고 생각합니다. 그 까닭은 다음과 같습니다.',
+    body: [
+        {
+            reason: '첫째, 친구와 직접 이야기하고 놀면 서로를 더 잘 알게 되어 사이가 가까워집니다. 우리 반 설문에서도 쉬는 시간에 친구와 논 날이 더 즐거웠다는 친구가 많았습니다.',
+            source: '우리 반 친구 20명 설문',
+        },
+        {
+            reason: '둘째, 화면을 오래 보면 눈이 피로해져서 다음 수업에 집중하기 어렵습니다. 쉬는 시간에는 눈도 쉬어야 합니다.',
+            source: '보건 선생님께 들은 이야기',
+        },
+    ],
+    conclusion:
+        '지금까지 쉬는 시간에 스마트폰을 쓰지 말아야 하는 까닭을 살펴보았습니다. 친구와 함께 놀면 사이가 가까워지고 눈도 쉬게 할 수 있습니다. 그러므로 우리는 쉬는 시간에 스마트폰 대신 친구와 함께 놀아야 합니다. 오늘부터 함께 실천해 봅씨다.',
+    typo: '봅씨다',
+    fix: '봅시다',
+    chat: {
+        default: '좋은 질문이에요! 먼저 내 주장을 한 문장으로 소리 내어 읽어 보세요. 그다음 "왜냐하면?" 하고 스스로 물어보면 근거가 떠오를 거예요. 어떤 근거가 떠올랐나요?',
+        answers: {
+            1: '주제는 "누가, 무엇을, 어떻게 해야 한다"가 드러나면 좋아요. 예를 들어 "스마트폰은 나쁘다"보다 "쉬는 시간에는 스마트폰을 쓰지 말자"가 더 또렷하죠. 내 주제에서 "누가"와 "무엇을"을 찾아볼까요?',
+            2: '근거를 찾을 때는 세 가지를 떠올려 보세요. ① 내가 겪은 일 ② 친구들에게 물어본 결과 ③ 책이나 기사에서 알게 된 사실. 이 중 어떤 걸 써 볼 수 있을까요?',
+            3: '다듬을 때는 글을 소리 내어 읽어 보세요. 숨이 차거나 어색한 곳이 고칠 곳이에요. 틀린 글자도 소리 내어 읽으면 잘 보여요!',
+        } as Record<number, string>,
+    },
+};
+
+/** 게임처럼 한 글자씩 입력되는 효과 */
+function typewrite(text: string, apply: (partial: string) => void, timers: React.MutableRefObject<number[]>, speedMs = 18) {
+    const chars = Array.from(text);
+    const stepSize = Math.max(1, Math.ceil(chars.length / 90)); // 긴 글도 2초 안팎
+    let i = 0;
+    const id = window.setInterval(() => {
+        i = Math.min(chars.length, i + stepSize);
+        apply(chars.slice(0, i).join(''));
+        if (i >= chars.length) window.clearInterval(id);
+    }, speedMs);
+    timers.current.push(id);
+}
 
 interface ChatMessage {
     role: 'user' | 'assistant' | 'error';
@@ -29,7 +78,8 @@ export const WritingWizard: React.FC<{
     initialData?: Essay | null;
     onExit: () => void;
     onSubmit: (data: EssayData) => Promise<boolean>;
-}> = ({ student, initialData, onExit, onSubmit }) => {
+    settings?: WritingSettings;
+}> = ({ student, initialData, onExit, onSubmit, settings = DEFAULT_WRITING_SETTINGS }) => {
     const isEditMode = !!initialData;
     const { toast, confirm } = useFeedback();
     const draftKey = draftStore.key(student, initialData?.id);
@@ -60,8 +110,19 @@ export const WritingWizard: React.FC<{
     const [suggestions, setSuggestions] = useState<{ refined: string; others: string[] } | null>(null);
     const [refining, setRefining] = useState(false);
     const [chatOpen, setChatOpen] = useState(false);
+    const [modelOpen, setModelOpen] = useState(false);
 
     const topRef = useRef<HTMLDivElement>(null);
+
+    // ----- 따라하기(연습) 모드: 고정 예시로 연습, 끝나면 원래 글로 복구 -----
+    const [practice, setPractice] = useState(false);
+    const snapshotRef = useRef<Draft | null>(null);
+    const typeTimers = useRef<number[]>([]);
+    const stopTyping = () => {
+        typeTimers.current.forEach((id) => window.clearInterval(id));
+        typeTimers.current = [];
+    };
+    useEffect(() => stopTyping, []);
 
     useEffect(() => {
         if (restored?.savedAt) toast(`${relativeTime(restored.savedAt)} 임시저장한 글을 불러왔어요.`, 'info');
@@ -75,32 +136,36 @@ export const WritingWizard: React.FC<{
     }, [topic, introduction, body, conclusion, initialData]);
 
     useEffect(() => {
-        if (!dirty && !restored) return;
+        if (practice || (!dirty && !restored)) return;
         const t = window.setTimeout(() => {
             const now = new Date().toISOString();
             draftStore.set(draftKey, { step, topic, introduction, body, conclusion, finalFullText, partsKey, savedAt: now });
             setSavedAt(now);
         }, 800);
         return () => window.clearTimeout(t);
-    }, [step, topic, introduction, body, conclusion, finalFullText, partsKey, draftKey, dirty, restored]);
+    }, [step, topic, introduction, body, conclusion, finalFullText, partsKey, draftKey, dirty, restored, practice]);
 
     // 새로고침·창 닫기 전에 한 번 더 확인
     useEffect(() => {
-        if (!dirty) return;
+        if (!dirty || practice) return;
         const handler = (e: BeforeUnloadEvent) => {
             e.preventDefault();
         };
         window.addEventListener('beforeunload', handler);
         return () => window.removeEventListener('beforeunload', handler);
-    }, [dirty]);
+    }, [dirty, practice]);
 
     // ----- 검사 -----
     const introLen = countChars(introduction);
     const conclLen = countChars(conclusion);
+    // 선생님 설정 (연습 중에는 예시 글 기준 100자로 고정)
+    const minIntro = practice ? 100 : settings.requireMin ? settings.minIntro : 1;
+    const minConcl = practice ? 100 : settings.requireMin ? settings.minConclusion : 1;
+    const showRemaining = practice || (settings.requireMin && settings.showRemaining);
     const bodyOk = body.every((b) => b.reason.trim() && b.source.trim());
     const valid = {
         1: topic.trim().length > 0,
-        2: introLen >= MIN_LEN && conclLen >= MIN_LEN && bodyOk,
+        2: introLen >= minIntro && conclLen >= minConcl && bodyOk,
         3: finalFullText.trim().length > 0,
     } as Record<number, boolean>;
 
@@ -112,7 +177,16 @@ export const WritingWizard: React.FC<{
     const goTo = async (next: number) => {
         if (next === 3 && step === 2) {
             if (!valid[2]) {
-                toast(`서론과 결론은 ${MIN_LEN}자 이상, 모든 근거에는 출처가 필요해요.`, 'error');
+                const parts: string[] = [];
+                if (introLen < minIntro) parts.push(settings.requireMin || practice ? `서론 ${minIntro - introLen}자` : '서론');
+                if (conclLen < minConcl) parts.push(settings.requireMin || practice ? `결론 ${minConcl - conclLen}자` : '결론');
+                if (!bodyOk) parts.push('근거·출처');
+                toast(
+                    settings.requireMin || practice
+                        ? `아직 조금 남았어요: ${parts.join(', ')}${bodyOk ? ' 더 써 주세요.' : '를 채워 주세요.'}`
+                        : `${parts.join(', ')}을(를) 채워 주세요.`,
+                    'error',
+                );
                 return;
             }
             // 서론·본론·결론이 바뀌었을 때만 전체 글을 새로 만듦 (3단계에서 고친 내용 보호)
@@ -145,6 +219,14 @@ export const WritingWizard: React.FC<{
         }
         setRefining(true);
         setSuggestions(null);
+        if (practice) {
+            // 연습에서는 AI를 부르지 않고 미리 정해 둔 추천을 보여 줌
+            window.setTimeout(() => {
+                setSuggestions({ refined: PRACTICE.refined, others: PRACTICE.others });
+                setRefining(false);
+            }, 1100);
+            return;
+        }
         const r = await getTopicSuggestions(topic, student.grade);
         setSuggestions({ refined: r.refinedTopic, others: r.suggestions });
         setRefining(false);
@@ -175,6 +257,10 @@ export const WritingWizard: React.FC<{
     };
 
     const handleSubmit = async () => {
+        if (practice) {
+            toast('지금은 연습이라 글이 올라가지 않아요.', 'info');
+            return;
+        }
         if (!valid[3]) return;
         setSubmitting(true);
         const ok = await onSubmit({ topic: topic.trim(), introduction, body, conclusion, fullText: finalFullText.trim() });
@@ -202,44 +288,93 @@ export const WritingWizard: React.FC<{
         setStep(1);
     };
 
-    // ---------- 글쓰기 따라하기 ----------
+    // ---------- 글쓰기 따라하기 (연습 모드) ----------
+    const PRACTICE_MIN = 100; // 예시 글이 늘 통과하도록 연습에서는 고정
+    const tour = useTour('writing', { autoStart: !isEditMode });
+
+    // 따라하기가 시작되면 지금 글을 잠시 보관하고 빈 연습장으로, 끝나면 원래대로
+    useEffect(() => {
+        if (tour.running && !practice) {
+            snapshotRef.current = { step, topic, introduction, body, conclusion, finalFullText, partsKey, savedAt };
+            setPractice(true);
+            setStep(1);
+            setTopic('');
+            setIntroduction('');
+            setBody([{ reason: '', source: '' }]);
+            setConclusion('');
+            setFinalFullText('');
+            setPartsKey('');
+            setSuggestions(null);
+            setRefining(false);
+        } else if (!tour.running && practice) {
+            stopTyping();
+            const snap = snapshotRef.current;
+            if (snap) {
+                setStep(snap.step);
+                setTopic(snap.topic);
+                setIntroduction(snap.introduction);
+                setBody(snap.body);
+                setConclusion(snap.conclusion);
+                setFinalFullText(snap.finalFullText);
+                setPartsKey(snap.partsKey);
+                setSavedAt(snap.savedAt);
+            }
+            setSuggestions(null);
+            setRefining(false);
+            setChatOpen(false);
+            setPractice(false);
+            topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tour.running]);
+
     const tourSteps: TourStep[] = [
         {
             title: '글쓰기 따라하기 시작!',
             body: (
                 <>
-                    주장하는 글은 <b>주제 → 서론·본론·결론 → 다듬기</b>, 세 단계로 써요. 요정이 옆에서 하나씩 알려 줄게요.
+                    주장하는 글은 <b>주제 → 서론·본론·결론 → 다듬기</b>, 세 단계로 써요.
+                    <br />
+                    <span className="text-ink-500">예시 글로 연습하는 거라 실제로 올라가지 않아요. 끝나면 내 글로 돌아와요.</span>
                 </>
             ),
+        },
+        {
+            target: 'model-btn',
+            title: '막힐 땐 예시 글을 봐요',
+            body: <>잘 쓴 주장하는 글을 언제든 열어 볼 수 있어요. 베끼지 말고 <b>짜임</b>을 살펴보세요.</>,
+            cta: { label: '예시 글 열어 보기', onClick: () => setModelOpen(true) },
+            skipIf: () => step >= 2,
         },
         {
             target: 'topic-input',
             title: '① 내 주장을 한 문장으로',
-            body: (
-                <>
-                    "~해야 한다", "~하자"로 끝나게 적어 보세요.
-                    <br />
-                    <span className="text-ink-500">예) 쉬는 시간에는 스마트폰을 쓰지 말자</span>
-                </>
-            ),
+            body: <>"~해야 한다", "~하자"로 끝나게 적어요. 직접 적거나 아래 버튼으로 예시를 넣어 보세요.</>,
             done: () => topic.trim().length >= 5,
             required: true,
             praise: '좋은 주장이에요!',
+            cta: { label: '예시 입력하기', onClick: () => typewrite(PRACTICE.topic, setTopic, typeTimers) },
             skipIf: () => step >= 2,
         },
         {
             target: 'ai-refine',
-            title: '② AI에게 다듬어 달라고 해 볼까요?',
-            body: '누르면 요정이 주제를 더 또렷하게 고치고, 다른 주제도 추천해 줘요.',
+            title: '② AI에게 다듬어 달라고 해요',
+            body: <>빛나는 <b>AI에게 다듬기</b>를 눌러 보세요. 요정이 주장을 더 또렷하게 고치고 다른 주제도 추천해 줘요.</>,
             done: () => refining || !!suggestions,
+            required: true,
+            action: true,
             praise: '요정이 추천을 만들고 있어요!',
             skipIf: () => step >= 2,
         },
         {
             target: 'suggestions',
             title: '③ 마음에 드는 주제 고르기',
-            body: '누르면 그 주제로 바뀌어요. 내가 쓴 주제가 더 좋으면 그대로 두어도 돼요.',
-            skipIf: () => step >= 2 || (!refining && !suggestions),
+            body: <>맨 위 <b>다듬은 주제</b>를 눌러 골라 보세요. 실제로 쓸 때는 내 주제가 더 좋으면 그대로 둬도 돼요.</>,
+            done: () => topic === PRACTICE.refined,
+            required: true,
+            praise: '주제가 정해졌어요!',
+            cta: { label: '대신 골라 주기', onClick: () => setTopic(PRACTICE.refined) },
+            skipIf: () => step >= 2,
         },
         {
             target: 'next-btn',
@@ -252,52 +387,69 @@ export const WritingWizard: React.FC<{
         {
             target: 'intro-field',
             title: '⑤ 서론: 문제 상황과 내 주장',
-            body: (
-                <>
-                    왜 이 글을 쓰게 됐는지, 내 주장이 무엇인지 적어요. <b>{MIN_LEN}자</b>가 넘으면 막대가 초록색이 돼요.
-                </>
-            ),
-            done: () => introLen >= MIN_LEN,
+            body: <>왜 이 글을 쓰게 됐는지, 내 주장이 무엇인지 적어요. 기준 글자 수를 넘으면 막대가 초록색이 돼요.</>,
+            done: () => countChars(introduction) >= PRACTICE_MIN,
+            required: true,
             praise: '서론 완성!',
+            cta: { label: '예시 입력하기', onClick: () => typewrite(PRACTICE.introduction, setIntroduction, typeTimers) },
             skipIf: () => step >= 3,
         },
         {
             target: 'body-0',
             title: '⑥ 본론: 근거와 출처',
-            body: (
-                <>
-                    "첫째, ~ 때문입니다"처럼 까닭을 쓰고, 아래 칸에 <b>어디서 알았는지</b>(책, 기사, 설문, 내 경험) 적어요.
-                </>
-            ),
+            body: <>"첫째, ~ 때문입니다"처럼 까닭을 쓰고, 아래 칸에 <b>어디서 알았는지</b>(책, 기사, 설문, 경험) 적어요.</>,
             done: () => !!body[0]?.reason.trim() && !!body[0]?.source.trim(),
+            required: true,
             praise: '근거와 출처를 모두 썼어요!',
+            cta: {
+                label: '예시 입력하기',
+                onClick: () => {
+                    typewrite(PRACTICE.body[0].reason, (t) => updatePart(0, 'reason', t), typeTimers);
+                    typewrite(PRACTICE.body[0].source, (t) => updatePart(0, 'source', t), typeTimers, 40);
+                },
+            },
             skipIf: () => step >= 3,
         },
         {
             target: 'add-reason',
             skipIfMissing: true,
-            title: '근거가 많을수록 튼튼해요',
-            body: <><b>근거 추가하기</b>로 둘째, 셋째 근거를 더 쓸 수 있어요.</>,
+            title: '⑦ 근거가 많을수록 튼튼해요',
+            body: <><b>근거 추가하기</b>로 둘째 근거를 더 넣어 볼까요?</>,
+            done: () => body.length >= 2 && !!body[1]?.reason.trim() && !!body[1]?.source.trim(),
+            praise: '근거가 두 개가 됐어요!',
+            cta: {
+                label: '근거 하나 더 넣기',
+                onClick: () => {
+                    setBody((prev) => (prev.length >= 2 ? prev : [...prev, { reason: '', source: '' }]));
+                    window.setTimeout(() => {
+                        typewrite(PRACTICE.body[1].reason, (t) => updatePart(1, 'reason', t), typeTimers);
+                        typewrite(PRACTICE.body[1].source, (t) => updatePart(1, 'source', t), typeTimers, 40);
+                    }, 50);
+                },
+            },
             skipIf: () => step >= 3,
         },
         {
             target: 'conclusion-field',
-            title: '⑦ 결론: 정리하고 한 번 더 강조',
+            title: '⑧ 결론: 정리하고 한 번 더 강조',
             body: '"그러므로 우리는 ~해야 합니다"처럼 주장을 다시 말하며 마무리해요.',
-            done: () => conclLen >= MIN_LEN,
+            done: () => countChars(conclusion) >= PRACTICE_MIN,
+            required: true,
             praise: '결론 완성!',
+            cta: { label: '예시 입력하기', onClick: () => typewrite(PRACTICE.conclusion, setConclusion, typeTimers) },
             skipIf: () => step >= 3,
         },
         {
             target: 'fairy-btn',
             title: '막히면 글쓰기 요정에게!',
-            body: '이 버튼을 누르면 AI 요정에게 물어볼 수 있어요. 요정은 대신 써 주지 않고, 스스로 생각하도록 도와줘요.',
+            body: '이 버튼을 누르면 요정에게 물어볼 수 있어요. 요정은 대신 써 주지 않고, 스스로 생각하도록 도와줘요.',
+            cta: { label: '요정에게 물어보기', onClick: () => setChatOpen(true) },
             skipIf: () => step >= 3,
         },
         {
             target: 'next-btn',
-            title: '⑧ 다 썼으면 다음!',
-            body: <>서론·결론 {MIN_LEN}자 이상, 모든 근거에 출처가 있어야 넘어갈 수 있어요.</>,
+            title: '⑨ 다 썼으면 다음!',
+            body: <>서론·본론·결론을 다 썼으면 <b>다음</b>을 눌러 마지막 단계로 가요.</>,
             action: true,
             allowOutside: true,
             done: () => step >= 3,
@@ -305,38 +457,53 @@ export const WritingWizard: React.FC<{
         },
         {
             target: 'final-text',
-            title: '⑨ 소리 내어 읽으며 다듬기',
-            body: '서론·본론·결론이 한 글로 합쳐졌어요. 어색한 문장이나 틀린 글자를 여기서 고쳐요.',
+            title: '⑩ 틀린 글자를 찾아라!',
+            body: (
+                <>
+                    서론·본론·결론이 한 글로 합쳐졌어요. 그런데 <b>마지막 문장</b>에 틀린 글자가 하나 숨어 있어요. 찾아서 고쳐 보세요!
+                </>
+            ),
+            done: () => !!finalFullText && !finalFullText.includes(PRACTICE.typo),
+            required: true,
+            praise: '틀린 글자를 고쳤어요! 소리 내어 읽으면 잘 보여요',
+            cta: { label: '힌트: 고쳐 주기', onClick: () => setFinalFullText((t) => t.replace(PRACTICE.typo, PRACTICE.fix)) },
         },
         {
             target: 'submit-btn',
-            title: '⑩ 글 올리기로 완성!',
+            title: '⑪ 글 올리기로 완성!',
             body: (
                 <>
-                    누르면 친구들이 읽을 수 있어요. 받은 <b>수정 코드</b>는 꼭 적어 두세요. 이제 혼자서도 할 수 있어요!
+                    진짜로 쓸 때는 이 버튼을 누르면 친구들이 읽을 수 있어요. 받은 <b>수정 코드</b>는 꼭 적어 두세요.
+                    <br />
+                    <span className="text-ink-500">연습 글은 사라지고, 이제 내 글을 쓸 차례예요!</span>
                 </>
             ),
         },
     ];
-    const stageStart = { 1: 0, 2: 5, 3: 11 } as Record<number, number>;
-    const tour = useTour('writing', { autoStart: !isEditMode, replayIndex: () => stageStart[step] ?? 0 });
 
     return (
         <div ref={topRef} className="mx-auto max-w-3xl scroll-mt-20 px-4 pb-32 pt-6 sm:px-6">
             {/* 상단 */}
             <div className="mb-5 flex items-center justify-between gap-2">
-                <Button variant="ghost" size="sm" icon={<ArrowLeft className="size-4" />} onClick={handleExit} className="-ml-2">
-                    {isEditMode ? '수정 그만하기' : '목록으로'}
-                </Button>
+                <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" icon={<ArrowLeft className="size-4" />} onClick={handleExit} className="-ml-2">
+                        {isEditMode ? '수정 그만하기' : '목록으로'}
+                    </Button>
+                    <Button variant="sun" size="sm" icon={<BookOpen className="size-4" />} onClick={() => setModelOpen(true)} data-tour="model-btn">
+                        예시 글 보기
+                    </Button>
+                </div>
                 <div className="flex items-center gap-2 text-xs text-ink-500">
-                    {savedAt ? (
+                    {practice ? (
+                        <Badge tone="sun">따라하기 연습 중 · 저장되지 않아요</Badge>
+                    ) : savedAt ? (
                         <span className="inline-flex items-center gap-1" title="이 기기에 자동으로 저장돼요">
                             <CloudCheck className="size-4 text-leaf-500" /> 임시저장됨 · {relativeTime(savedAt)}
                         </span>
                     ) : (
                         <span>쓰는 내용은 자동으로 임시저장돼요</span>
                     )}
-                    {savedAt && (
+                    {savedAt && !practice && (
                         <button type="button" onClick={discardDraft} className="font-medium text-ink-400 underline-offset-2 hover:text-rose-600 hover:underline">
                             새로 쓰기
                         </button>
@@ -446,7 +613,7 @@ export const WritingWizard: React.FC<{
                         <StepHeading eyebrow="2단계" title="서론 · 본론 · 결론 쓰기" desc={<span className="font-semibold text-brand-700">“{topic}”</span>} />
 
                         <div data-tour="intro-field">
-                            <PartLabel title="서론" hint="문제 상황과 나의 주장을 밝혀요" count={introLen} min={MIN_LEN} />
+                            <PartLabel title="서론" hint="문제 상황과 나의 주장을 밝혀요" count={introLen} min={minIntro} showRemaining={showRemaining} />
                             <Textarea
                                 aria-label="서론"
                                 value={introduction}
@@ -497,7 +664,7 @@ export const WritingWizard: React.FC<{
                         </div>
 
                         <div data-tour="conclusion-field">
-                            <PartLabel title="결론" hint="내용을 정리하고 주장을 한 번 더 강조해요" count={conclLen} min={MIN_LEN} />
+                            <PartLabel title="결론" hint="내용을 정리하고 주장을 한 번 더 강조해요" count={conclLen} min={minConcl} showRemaining={showRemaining} />
                             <Textarea
                                 aria-label="결론"
                                 value={conclusion}
@@ -549,9 +716,9 @@ export const WritingWizard: React.FC<{
                     </Button>
                     {step === 2 && (
                         <div className="hidden text-xs text-ink-500 sm:block">
-                            <Check className={cx('mr-1 inline size-3.5', introLen >= MIN_LEN ? 'text-leaf-500' : 'text-ink-300')} />서론
+                            <Check className={cx('mr-1 inline size-3.5', introLen >= minIntro ? 'text-leaf-500' : 'text-ink-300')} />서론
                             <Check className={cx('ml-3 mr-1 inline size-3.5', bodyOk ? 'text-leaf-500' : 'text-ink-300')} />근거·출처
-                            <Check className={cx('ml-3 mr-1 inline size-3.5', conclLen >= MIN_LEN ? 'text-leaf-500' : 'text-ink-300')} />결론
+                            <Check className={cx('ml-3 mr-1 inline size-3.5', conclLen >= minConcl ? 'text-leaf-500' : 'text-ink-300')} />결론
                         </div>
                     )}
                     {step < 3 ? (
@@ -577,7 +744,8 @@ export const WritingWizard: React.FC<{
                 <Bot className="size-5 text-sun-400" />
                 <span className="hidden sm:inline">글쓰기 요정</span>
             </button>
-            <Tour steps={tourSteps} running={tour.running} startAt={tour.startAt} onFinish={tour.finish} finishLabel="혼자 해 볼게요!" />
+            <ModelEssayModal open={modelOpen} onClose={() => setModelOpen(false)} />
+            <Tour steps={tourSteps} running={tour.running} startAt={tour.startAt} onFinish={tour.finish} finishLabel="내 글 쓰러 가기!" />
             <ChatPanel
                 open={chatOpen}
                 onClose={() => setChatOpen(false)}
@@ -589,6 +757,7 @@ export const WritingWizard: React.FC<{
                 }}
                 grade={student.grade}
                 step={step}
+                practice={practice}
             />
         </div>
     );
@@ -604,26 +773,19 @@ const StepHeading: React.FC<{ eyebrow: string; title: string; desc?: React.React
     </div>
 );
 
-const PartLabel: React.FC<{ title: string; hint: string; count?: number; min?: number }> = ({ title, hint, count, min }) => (
+const PartLabel: React.FC<{ title: string; hint: string; count?: number; min?: number; showRemaining?: boolean }> = ({
+    title,
+    hint,
+    count,
+    min,
+    showRemaining = true,
+}) => (
     <div className="mb-2 flex items-end justify-between gap-3">
         <div>
             <h2 className="text-lg font-bold text-ink-900">{title}</h2>
             <p className="text-xs text-ink-500">{hint}</p>
         </div>
-        {count !== undefined && min !== undefined && (
-            <div className="w-24 shrink-0 text-right">
-                <span className={cx('text-xs font-semibold', count >= min ? 'text-leaf-600' : 'text-ink-500')}>
-                    {count >= min ? <Check className="mr-0.5 inline size-3.5" /> : null}
-                    {count} / {min}자
-                </span>
-                <span className="mt-1 block h-1 overflow-hidden rounded-full bg-ink-900/10">
-                    <span
-                        className={cx('block h-full rounded-full transition-all', count >= min ? 'bg-leaf-500' : 'bg-brand-500')}
-                        style={{ width: `${Math.min(100, (count / min) * 100)}%` }}
-                    />
-                </span>
-            </div>
-        )}
+        {count !== undefined && min !== undefined && <CharGoal count={count} min={min <= 1 ? 0 : min} showRemaining={showRemaining} />}
     </div>
 );
 
@@ -648,7 +810,8 @@ const ChatPanel: React.FC<{
     context: { topic: string; introduction: string; body: string; conclusion: string };
     grade: string;
     step: number;
-}> = ({ open, onClose, context, grade, step }) => {
+    practice?: boolean;
+}> = ({ open, onClose, context, grade, step, practice }) => {
     const [history, setHistory] = useState<ChatMessage[]>([
         { role: 'assistant', content: '안녕하세요! 저는 글쓰기 요정이에요. 글을 대신 써 주지는 않지만, 막히는 부분이 있으면 같이 생각해 볼게요.' },
     ]);
@@ -678,6 +841,14 @@ const ChatPanel: React.FC<{
         setHistory((h) => [...h, { role: 'user', content: q }]);
         setInput('');
         setLoading(true);
+        if (practice) {
+            // 연습에서는 미리 정해 둔 답변
+            window.setTimeout(() => {
+                setHistory((h) => [...h, { role: 'assistant', content: PRACTICE.chat.answers[step] || PRACTICE.chat.default }]);
+                setLoading(false);
+            }, 900);
+            return;
+        }
         try {
             const answer = await getWritingAssistantResponse(context, q, grade);
             setHistory((h) => [...h, { role: 'assistant', content: answer }]);

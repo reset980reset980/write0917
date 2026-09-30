@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, Check, ChevronLeft, ChevronRight, Hand, PartyPopper } from 'lucide-react';
+import { Bot, Check, ChevronLeft, ChevronRight, Hand, PartyPopper, Wand2 } from 'lucide-react';
 import { Button, cx } from './ui';
 
 /**
@@ -28,6 +28,8 @@ export type TourStep = {
     skipIf?: () => boolean;
     /** 스포트라이트 밖도 누를 수 있게 */
     allowOutside?: boolean;
+    /** 말풍선 안 도움 버튼 (예: 예시 입력하기) — 해내기 전까지만 보임 */
+    cta?: { label: string; onClick: () => void };
 };
 
 const TOUR_PREFIX = 'w917.tour.';
@@ -212,6 +214,8 @@ export const Tour: React.FC<{
     useEffect(() => {
         if (!running) return;
         const onKey = (e: KeyboardEvent) => {
+            // 다른 창(예시 글, 확인창 등)이 열려 있으면 그 창만 닫히도록 무시
+            if (document.querySelector('[aria-modal="true"]')) return;
             if (e.key === 'Escape') onFinish();
         };
         document.addEventListener('keydown', onKey);
@@ -318,6 +322,15 @@ export const Tour: React.FC<{
                         <h3 className="mt-0.5 text-[16px] font-extrabold leading-snug text-ink-900">{step.title}</h3>
                         <div className="mt-1 text-sm leading-relaxed text-ink-700">{step.body}</div>
 
+                        {step.cta && !done && (
+                            <button
+                                type="button"
+                                onClick={step.cta.onClick}
+                                className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-sun-100 px-3 py-1.5 text-xs font-bold text-sun-600 transition-colors hover:bg-sun-400 hover:text-white"
+                            >
+                                <Wand2 className="size-3.5" /> {step.cta.label}
+                            </button>
+                        )}
                         {step.done && (
                             <p
                                 className={cx(

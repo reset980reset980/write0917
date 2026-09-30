@@ -136,6 +136,41 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
 );
 Select.displayName = 'Select';
 
+// ---------- Switch (켜기/끄기) ----------
+
+export const Switch: React.FC<{
+    checked: boolean;
+    onChange: (v: boolean) => void;
+    label: string;
+    description?: React.ReactNode;
+    disabled?: boolean;
+}> = ({ checked, onChange, label, description, disabled }) => {
+    const id = useId();
+    return (
+        <div className={cx('flex items-start justify-between gap-4', disabled && 'opacity-50')}>
+            <label htmlFor={id} className="min-w-0 cursor-pointer">
+                <span className="block text-[15px] font-semibold text-ink-900">{label}</span>
+                {description && <span className="mt-0.5 block text-xs leading-relaxed text-ink-500">{description}</span>}
+            </label>
+            <button
+                id={id}
+                type="button"
+                role="switch"
+                aria-checked={checked}
+                disabled={disabled}
+                onClick={() => onChange(!checked)}
+                className={cx(
+                    'relative mt-0.5 inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors',
+                    checked ? 'bg-leaf-500' : 'bg-ink-900/15',
+                )}
+            >
+                <span className={cx('inline-block size-5 rounded-full bg-white shadow transition-transform', checked ? 'translate-x-6' : 'translate-x-1')} />
+                <span className="sr-only">{checked ? '켜짐' : '꺼짐'}</span>
+            </button>
+        </div>
+    );
+};
+
 // ---------- Small pieces ----------
 
 export const Badge: React.FC<{ tone?: 'brand' | 'sun' | 'leaf' | 'ink' | 'rose'; className?: string; children: React.ReactNode }> = ({

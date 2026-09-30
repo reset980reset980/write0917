@@ -1,4 +1,4 @@
-import { Essay, Comment, EssayData } from '../types';
+import { Essay, Comment, EssayData, WritingSettings, DEFAULT_WRITING_SETTINGS } from '../types';
 import { API_BASE_URL } from '../constants';
 
 // 선생님 로그인 토큰 (새로고침하면 다시 로그인)
@@ -102,6 +102,19 @@ export function getComments(essayId: string): Promise<Comment[]> {
 // 댓글 삭제 (선생님만)
 export function deleteComment(commentId: string): Promise<{ success: boolean }> {
     return request<{ success: boolean }>(`/api/comments/${commentId}`, { method: 'DELETE' });
+}
+
+// 글쓰기 설정 (누구나 읽기, 선생님만 저장)
+export async function getWritingSettings(): Promise<WritingSettings> {
+    try {
+        return { ...DEFAULT_WRITING_SETTINGS, ...(await request<Partial<WritingSettings>>('/api/settings')) };
+    } catch {
+        return DEFAULT_WRITING_SETTINGS; // 서버에 못 닿아도 글쓰기는 기본값으로 계속
+    }
+}
+
+export function saveWritingSettings(settings: WritingSettings): Promise<WritingSettings> {
+    return request<WritingSettings>('/api/settings', { method: 'PUT', json: settings });
 }
 
 // 저장해 둔 선생님 토큰이 아직 유효한지 확인

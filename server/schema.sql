@@ -33,3 +33,10 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX IF NOT EXISTS essays_created_at_idx ON essays (created_at DESC);
 CREATE INDEX IF NOT EXISTS essays_grade_class_idx ON essays (author_grade, author_class);
 CREATE INDEX IF NOT EXISTS comments_essay_id_idx ON comments (essay_id, created_at);
+
+-- 선생님이 바꾸는 설정 (예: 글쓰기 글자 수 조건)
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { Essay, EssayData, Student } from './types';
+import { DEFAULT_WRITING_SETTINGS, type Essay, type EssayData, type Student, type WritingSettings } from './types';
 import { FeedbackProvider, Spinner, useFeedback } from './components/ui';
 import { AppHeader } from './components/AppHeader';
 import { LandingView, StudentEntryView, TeacherLoginView } from './views/EntryViews';
@@ -7,7 +7,7 @@ import { GalleryView } from './views/GalleryView';
 import { EssayDetailView } from './views/EssayDetailView';
 import { WritingWizard } from './views/WritingWizard';
 import { FindByCodeView, WritingSuccessView } from './views/SmallViews';
-import { addEssay, deleteEssay, getAllEssays, incrementLike, setAdminToken, updateEssay, verifyAdminToken } from './services/api';
+import { addEssay, deleteEssay, getAllEssays, getWritingSettings, incrementLike, setAdminToken, updateEssay, verifyAdminToken } from './services/api';
 import { likedStore, myEssaysStore, sessionStore } from './storage';
 
 type View =
@@ -32,6 +32,7 @@ const AppInner: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [likedIds, setLikedIds] = useState<Set<string>>(() => likedStore.get());
+    const [writingSettings, setWritingSettings] = useState<WritingSettings>(DEFAULT_WRITING_SETTINGS);
     const [myEssays, setMyEssays] = useState(() => myEssaysStore.all());
     const myEssayIds = new Set(myEssays.map((e) => e.id));
 
@@ -77,6 +78,11 @@ const AppInner: React.FC = () => {
     useEffect(() => {
         if (view.name === 'gallery') loadEssays();
     }, [view.name, loadEssays]);
+
+    // 글쓰기 화면을 열 때마다 선생님이 정한 최신 설정을 받아 옴
+    useEffect(() => {
+        if (view.name === 'write' || view.name === 'edit') getWritingSettings().then(setWritingSettings);
+    }, [view.name]);
 
     // ---------- 새로고침해도 로그인 유지 ----------
     useEffect(() => {
@@ -294,13 +300,14 @@ const AppInner: React.FC = () => {
             );
             break;
         case 'write':
-            body = student && <WritingWizard student={student} onExit={() => go({ name: 'gallery' })} onSubmit={handleCreate} />;
+            body = student && <WritingWizard student={student} settings={writingSettings} onExit={() => go({ name: 'gallery' })} onSubmit={handleCreate} />;
             break;
         case 'edit':
             body = (
                 <WritingWizard
                     student={view.essay.student}
                     initialData={view.essay}
+                    settings={writingSettings}
                     onExit={() => go({ name: 'gallery' })}
                     onSubmit={handleUpdate(view.essay)}
                 />

@@ -297,6 +297,45 @@ app.post('/api/admin/login', loginLimiter, (req, res) => {
 
 app.get('/api/admin/me', requireAdmin, (_req, res) => res.json({ ok: true }));
 
+// ---------- 글쓰기 설정 (선생님이 바꿈) ----------
+
+const DEFAULT_WRITING_SETTINGS = {
+  requireMin: true, // 서론·결론 최소 글자 수 조건 사용
+  minIntro: 100, // 서론 최소 글자 수 (공백 제외)
+  minConclusion: 100, // 결론 최소 글자 수 (공백 제외)
+  showRemaining: true, // 학생에게 '몇 자 남았는지' 보여주기
+};
+
+async function readWritingSettings() {
+  const { rows } = await query("SELECT value FROM settings WHERE key = 'writing'");
+  return { ...DEFAULT_WRITING_SETTINGS, ...(rows[0]?.value || {}) };
+}
+
+app.get('/api/settings', wrap(async (_req, res) => {
+  res.json(await readWritingSettings());
+}));
+
+app.put('/api/settings', requireAdmin, wrap(async (req, res) => {
+  const b = req.body || {};
+  const bool = (v, field) => {
+    if (typeof v !== 'boolean') throw new BadRequest(`${field} 값이 올바르지 않습니다.`);
+    return v;
+  };
+  const current = await readWritingSettings();
+  const next = {
+    requireMin: b.requireMin === undefined ? current.requireMin : bool(b.requireMin, '글자 수 조건'),
+    minIntro: b.minIntro === undefined ? current.minIntro : int(b.minIntro, '서론 최소 글자 수', { min: 1, max: 3000 }),
+    minConclusion: b.minConclusion === undefined ? current.minConclusion : int(b.minConclusion, '결론 최소 글자 수', { min: 1, max: 3000 }),
+    showRemaining: b.showRemaining === undefined ? current.showRemaining : bool(b.showRemaining, '남은 글자 수 표시'),
+  };
+  await query(
+    `INSERT INTO settings (key, value, updated_at) VALUES ('writing', $1, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [JSON.stringify(next)],
+  );
+  res.json(next);
+}));
+
 // AI: 주제 다듬기
 app.post('/api/ai/topic-suggestions', aiLimiter, wrap(async (req, res) => {
   const topic = text(req.body?.topic, '주제', { max: 300 });

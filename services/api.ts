@@ -116,11 +116,11 @@ export async function verifyAdminToken(): Promise<boolean> {
 }
 
 // 선생님 로그인 (성공하면 토큰 저장)
-export async function loginTeacher(username: string, password: string): Promise<string | null> {
+export async function loginTeacher(username: string, password: string, remember = false): Promise<string | null> {
     try {
         const { token } = await request<{ token: string }>('/api/admin/login', {
             method: 'POST',
-            json: { username, password },
+            json: { username, password, remember },
         });
         setAdminToken(token);
         return token;

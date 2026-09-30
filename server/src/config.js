@@ -20,6 +20,8 @@ export const config = {
   adminPasswordHash: required('ADMIN_PASSWORD_HASH'),
   tokenSecret: required('TOKEN_SECRET'),
   tokenTtlHours: Number(process.env.TOKEN_TTL_HOURS || 12),
+  // '로그인 상태 유지'를 켰을 때 유효 기간 (일)
+  rememberDays: Number(process.env.REMEMBER_DAYS || 30),
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
 };

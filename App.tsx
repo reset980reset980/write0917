@@ -247,8 +247,8 @@ const AppInner: React.FC = () => {
             return (
                 <TeacherLoginView
                     onBack={() => go({ name: 'landing' })}
-                    onLogin={(token) => {
-                        sessionStore.setAdminToken(token);
+                    onLogin={(token, remember) => {
+                        sessionStore.setAdminToken(token, remember);
                         setIsAdmin(true);
                         setStudent(null);
                         go({ name: 'gallery' });

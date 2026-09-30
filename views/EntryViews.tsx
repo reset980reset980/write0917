@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, GraduationCap, Lightbulb, MessageCircle, NotebookPen, Sparkles, UserRound } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, GraduationCap, Lightbulb, MessageCircle, NotebookPen, Sparkles, UserRound } from 'lucide-react';
 import type { Student } from '../types';
 import { GRADES } from '../constants';
 import { Button, Card, Field, Input, Select, useFeedback } from '../components/ui';
@@ -137,9 +137,12 @@ export const StudentEntryView: React.FC<{ onStart: (s: Student) => void; onBack:
 
 // ---------- 선생님 로그인 ----------
 
-export const TeacherLoginView: React.FC<{ onLogin: (token: string) => void; onBack: () => void }> = ({ onLogin, onBack }) => {
+export const TeacherLoginView: React.FC<{ onLogin: (token: string, remember: boolean) => void; onBack: () => void }> = ({ onLogin, onBack }) => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [remember, setRemember] = useState(false);
+    const [capsLock, setCapsLock] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -148,8 +151,8 @@ export const TeacherLoginView: React.FC<{ onLogin: (token: string) => void; onBa
         setLoading(true);
         setError('');
         try {
-            const token = await loginTeacher(username.trim(), password);
-            if (token) onLogin(token);
+            const token = await loginTeacher(username.trim(), password, remember);
+            if (token) onLogin(token, remember);
             else setError('아이디 또는 비밀번호가 올바르지 않습니다.');
         } catch (err: any) {
             setError(err?.message || '로그인 중 오류가 발생했습니다.');
@@ -181,19 +184,47 @@ export const TeacherLoginView: React.FC<{ onLogin: (token: string) => void; onBa
                             required
                         />
                     </Field>
-                    <Field label="비밀번호" htmlFor="password">
-                        <Input
-                            id="password"
-                            type="password"
-                            autoComplete="current-password"
-                            value={password}
-                            onChange={(e) => {
-                                setPassword(e.target.value);
-                                setError('');
-                            }}
-                            required
-                        />
+                    <Field label="비밀번호" htmlFor="password" hint={capsLock ? <span className="font-semibold text-sun-600">Caps Lock이 켜져 있어요</span> : undefined}>
+                        <div className="relative">
+                            <Input
+                                id="password"
+                                type={showPassword ? 'text' : 'password'}
+                                autoComplete="current-password"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={password}
+                                onChange={(e) => {
+                                    setPassword(e.target.value);
+                                    setError('');
+                                }}
+                                onKeyUp={(e) => setCapsLock(e.getModifierState('CapsLock'))}
+                                required
+                                className="pr-11"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword((v) => !v)}
+                                className="absolute right-1.5 top-1/2 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink-900/5 hover:text-ink-900"
+                                aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 보기'}
+                                aria-pressed={showPassword}
+                                title={showPassword ? '비밀번호 숨기기' : '비밀번호 보기'}
+                            >
+                                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                            </button>
+                        </div>
                     </Field>
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-xl px-1 py-1 text-sm text-ink-700 select-none">
+                        <input
+                            type="checkbox"
+                            checked={remember}
+                            onChange={(e) => setRemember(e.target.checked)}
+                            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded accent-leaf-500"
+                        />
+                        <span>
+                            <span className="font-semibold">로그인 상태 유지</span>
+                            <span className="block text-xs text-ink-500">30일 동안 다시 로그인하지 않아도 돼요. 학생과 같이 쓰는 컴퓨터에서는 켜지 마세요.</span>
+                        </span>
+                    </label>
                     {error && (
                         <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-600">
                             {error}

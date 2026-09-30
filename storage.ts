@@ -38,8 +38,13 @@ export function useStoredState<T>(key: string, fallback: T, where: 'local' | 'se
 export const sessionStore = {
     getStudent: () => read<Student | null>(session, 'w917.student', null),
     setStudent: (s: Student | null) => write(session, 'w917.student', s),
-    getAdminToken: () => read<string | null>(session, 'w917.adminToken', null),
-    setAdminToken: (t: string | null) => write(session, 'w917.adminToken', t),
+    // '로그인 상태 유지'를 켜면 localStorage(브라우저를 닫아도 유지), 아니면 sessionStorage(탭을 닫으면 사라짐)
+    getAdminToken: () => read<string | null>(session, 'w917.adminToken', null) ?? read<string | null>(local, 'w917.adminToken', null),
+    setAdminToken: (t: string | null, remember = false) => {
+        write(session, 'w917.adminToken', null);
+        write(local, 'w917.adminToken', null);
+        if (t) write(remember ? local : session, 'w917.adminToken', t);
+    },
 };
 
 // ---------- 좋아요 누른 글 ----------

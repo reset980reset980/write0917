@@ -31,12 +31,17 @@ export function checkAdminCredentials(username, password) {
   return userOk && passOk;
 }
 
+// 비밀번호 해시도 서명 키에 섞어서, 비밀번호를 바꾸면 기존 로그인(유지 포함)이 모두 풀리게 함
 function sign(payload) {
-  return crypto.createHmac('sha256', config.tokenSecret).update(payload).digest('base64url');
+  return crypto
+    .createHmac('sha256', `${config.tokenSecret}:${config.adminPasswordHash}`)
+    .update(payload)
+    .digest('base64url');
 }
 
-export function issueToken() {
-  const exp = Date.now() + config.tokenTtlHours * 3600 * 1000;
+export function issueToken({ remember = false } = {}) {
+  const ttlMs = remember ? config.rememberDays * 86400 * 1000 : config.tokenTtlHours * 3600 * 1000;
+  const exp = Date.now() + ttlMs;
   const payload = Buffer.from(JSON.stringify({ role: 'admin', exp })).toString('base64url');
   return { token: `${payload}.${sign(payload)}`, expiresAt: new Date(exp).toISOString() };
 }

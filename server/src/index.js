@@ -292,7 +292,7 @@ app.post('/api/admin/login', loginLimiter, (req, res) => {
   if (!checkAdminCredentials(username, password)) {
     return res.status(401).json({ error: '아이디 또는 비밀번호가 올바르지 않습니다.' });
   }
-  res.json(issueToken());
+  res.json(issueToken({ remember: req.body?.remember === true }));
 });
 
 app.get('/api/admin/me', requireAdmin, (_req, res) => res.json({ ok: true }));

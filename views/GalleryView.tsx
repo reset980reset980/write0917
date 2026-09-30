@@ -5,6 +5,7 @@ import { GRADES } from '../constants';
 import { Button, EmptyState, Input, Select, Spinner, cx } from '../components/ui';
 import EssayCard from '../components/EssayCard';
 import { downloadEssaysCsv } from '../utils';
+import { Tour, useTour, type TourStep } from '../components/Tour';
 
 type Tab = 'all' | 'mine';
 
@@ -73,6 +74,70 @@ export const GalleryView: React.FC<{
 
     const filterLabel = [grade && `${grade}학년`, cls && `${cls}반`].filter(Boolean).join('_') || '전체';
 
+    // ---------- 따라하기 ----------
+    const tour = useTour(isAdmin ? 'teacher-gallery' : 'student-gallery');
+    const studentSteps: TourStep[] = [
+        {
+            title: `반가워요${student ? `, ${student.name}` : ''}!`,
+            body: <>처음 왔군요. 글쓰기 요정이 사용법을 알려 줄게요. <b>1분</b>이면 끝나요!</>,
+        },
+        {
+            target: 'filters',
+            title: '우리 반 글부터 보여요',
+            body: <>학년·반을 바꾸거나, <b>주제·이름</b>으로 친구 글을 찾을 수 있어요.</>,
+        },
+        {
+            target: 'essay-card',
+            skipIfMissing: true,
+            title: '카드를 누르면 글을 읽어요',
+            body: <>마음에 드는 글에는 <b>좋아요</b>와 <b>응원 댓글</b>을 남겨 주세요. 좋아요는 글마다 한 번씩!</>,
+        },
+        {
+            target: 'tab-mine',
+            title: '내 글 모아보기',
+            body: <>이 기기에서 쓴 글이 모여요. 여기서 고르면 <b>코드 없이</b> 내 글을 고칠 수 있어요.</>,
+        },
+        {
+            target: 'find-code',
+            title: '다른 컴퓨터에서 쓴 글은?',
+            body: <>글을 올리면 <b>6자리 수정 코드</b>를 줘요. 그 코드로 내 글을 찾아 고치거나 지울 수 있어요.</>,
+        },
+        {
+            target: 'new-essay',
+            title: '이제 첫 글을 써 볼까요?',
+            body: <>빛나는 <b>새 글 쓰기</b>를 누르면 글쓰기 따라하기가 이어져요!</>,
+        },
+    ];
+    const teacherSteps: TourStep[] = [
+        { title: '선생님, 환영합니다!', body: '학생 글을 관리하는 기능을 짧게 소개할게요.' },
+        {
+            target: 'stats',
+            skipIfMissing: true,
+            title: '반별 글 현황',
+            body: '반을 누르면 그 반 글만 모아 볼 수 있어요.',
+        },
+        {
+            target: 'filters',
+            title: '학년·반·검색',
+            body: '학년과 반을 고르거나 주제·학생 이름으로 찾아요.',
+        },
+        {
+            target: 'essay-card',
+            skipIfMissing: true,
+            title: '수정 코드와 삭제',
+            body: <>학생이 코드를 잊어버리면 카드 아래 <b>수정 코드</b>를 알려 주세요. 휴지통으로 글을 지울 수 있어요.</>,
+        },
+        {
+            target: 'export',
+            title: '엑셀로 내려받기',
+            body: <>지금 보이는 글을 표로 받아요. 평가나 <b>생활기록부</b> 쓸 때 활용해 보세요.</>,
+        },
+        {
+            title: '댓글 관리',
+            body: <>글을 열면 선생님 이름으로 댓글을 달거나, 부적절한 댓글을 <b>지울 수</b> 있어요. 선생님 댓글은 초록색으로 보여요.</>,
+        },
+    ];
+
     return (
         <div className="mx-auto max-w-6xl px-4 pb-24 pt-8 sm:px-6">
             {/* 제목 영역 */}
@@ -91,6 +156,7 @@ export const GalleryView: React.FC<{
                         <Button
                             variant="secondary"
                             icon={<Download className="size-4" />}
+                            data-tour="export"
                             disabled={!visible.length}
                             onClick={() => downloadEssaysCsv(visible, filterLabel)}
                         >
@@ -98,10 +164,10 @@ export const GalleryView: React.FC<{
                         </Button>
                     ) : (
                         <>
-                            <Button variant="secondary" icon={<KeyRound className="size-4" />} onClick={onFindByCode}>
+                            <Button variant="secondary" icon={<KeyRound className="size-4" />} onClick={onFindByCode} data-tour="find-code">
                                 수정 코드로 찾기
                             </Button>
-                            <Button icon={<PenLine className="size-4" />} onClick={onNewEssay}>
+                            <Button icon={<PenLine className="size-4" />} onClick={onNewEssay} data-tour="new-essay">
                                 새 글 쓰기
                             </Button>
                         </>
@@ -111,7 +177,7 @@ export const GalleryView: React.FC<{
 
             {/* 선생님: 반별 현황 */}
             {isAdmin && classStats.length > 0 && (
-                <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
+                <div className="mt-6 flex gap-2 overflow-x-auto pb-1" data-tour="stats">
                     <StatChip label="전체" value={essays.length} active={!grade && !cls} onClick={resetFilters} />
                     {classStats.map((s) => (
                         <StatChip
@@ -131,9 +197,9 @@ export const GalleryView: React.FC<{
 
             {/* 도구 막대 */}
             <div className="sticky top-16 z-20 -mx-4 mt-6 border-y border-line/60 bg-paper/90 px-4 py-3 backdrop-blur-md sm:mx-0 sm:rounded-2xl sm:border sm:bg-white/80 sm:px-3">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2" data-tour="filters">
                     {!isAdmin && (
-                        <div className="flex rounded-xl bg-ink-900/5 p-1" role="tablist" aria-label="글 보기">
+                        <div className="flex rounded-xl bg-ink-900/5 p-1" role="tablist" aria-label="글 보기" data-tour="tab-mine">
                             {(
                                 [
                                     ['all', '모든 글', <Users key="u" className="size-4" />],
@@ -230,7 +296,7 @@ export const GalleryView: React.FC<{
                 ) : visible.length ? (
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         {visible.map((essay, i) => (
-                            <div key={essay.id} className="animate-rise" style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}>
+                            <div key={essay.id} className="animate-rise" style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }} data-tour={i === 0 ? 'essay-card' : undefined}>
                                 <EssayCard
                                     essay={essay}
                                     onSelect={() => onSelect(essay)}
@@ -279,6 +345,14 @@ export const GalleryView: React.FC<{
                     />
                 )}
             </div>
+
+            <Tour
+                steps={isAdmin ? teacherSteps : studentSteps}
+                running={tour.running}
+                startAt={tour.startAt}
+                onFinish={tour.finish}
+                finishLabel={isAdmin ? '시작하기' : '알겠어요!'}
+            />
 
             {/* 모바일: 떠 있는 글쓰기 버튼 */}
             {!isAdmin && (

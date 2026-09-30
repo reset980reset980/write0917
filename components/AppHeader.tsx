@@ -1,5 +1,6 @@
 import React from 'react';
-import { LogOut, PenLine, GraduationCap, UserRound } from 'lucide-react';
+import { LogOut, PenLine, GraduationCap, UserRound, CircleHelp } from 'lucide-react';
+import { requestTourReplay } from './Tour';
 import type { Student } from '../types';
 import { cx } from './ui';
 
@@ -27,6 +28,17 @@ export const AppHeader: React.FC<{
             <Logo onClick={onHome} />
             <div className="flex items-center gap-2">
                 {children}
+                {(student || isAdmin) && (
+                    <button
+                        type="button"
+                        onClick={requestTourReplay}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-ink-500 transition-colors hover:bg-ink-900/5 hover:text-ink-900"
+                        title="이 화면 따라하기 다시 보기"
+                    >
+                        <CircleHelp className="size-4" />
+                        <span className="hidden sm:inline">사용법</span>
+                    </button>
+                )}
                 {(student || isAdmin) && (
                     <div className="flex items-center gap-1 rounded-full border border-line bg-white py-1 pl-3 pr-1 shadow-sm">
                         {isAdmin ? (

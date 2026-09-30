@@ -7,6 +7,7 @@ import { Badge, Button, Card, IconButton, Input, Linkify, Textarea, cx, useFeedb
 import { getTopicSuggestions, getWritingAssistantResponse } from '../services/api';
 import { draftStore, type Draft } from '../storage';
 import { countChars, relativeTime, studentLabel } from '../utils';
+import { Tour, useTour, type TourStep } from '../components/Tour';
 
 const MIN_LEN = 100;
 
@@ -201,6 +202,125 @@ export const WritingWizard: React.FC<{
         setStep(1);
     };
 
+    // ---------- 글쓰기 따라하기 ----------
+    const tourSteps: TourStep[] = [
+        {
+            title: '글쓰기 따라하기 시작!',
+            body: (
+                <>
+                    주장하는 글은 <b>주제 → 서론·본론·결론 → 다듬기</b>, 세 단계로 써요. 요정이 옆에서 하나씩 알려 줄게요.
+                </>
+            ),
+        },
+        {
+            target: 'topic-input',
+            title: '① 내 주장을 한 문장으로',
+            body: (
+                <>
+                    "~해야 한다", "~하자"로 끝나게 적어 보세요.
+                    <br />
+                    <span className="text-ink-500">예) 쉬는 시간에는 스마트폰을 쓰지 말자</span>
+                </>
+            ),
+            done: () => topic.trim().length >= 5,
+            required: true,
+            praise: '좋은 주장이에요!',
+            skipIf: () => step >= 2,
+        },
+        {
+            target: 'ai-refine',
+            title: '② AI에게 다듬어 달라고 해 볼까요?',
+            body: '누르면 요정이 주제를 더 또렷하게 고치고, 다른 주제도 추천해 줘요.',
+            done: () => refining || !!suggestions,
+            praise: '요정이 추천을 만들고 있어요!',
+            skipIf: () => step >= 2,
+        },
+        {
+            target: 'suggestions',
+            title: '③ 마음에 드는 주제 고르기',
+            body: '누르면 그 주제로 바뀌어요. 내가 쓴 주제가 더 좋으면 그대로 두어도 돼요.',
+            skipIf: () => step >= 2 || (!refining && !suggestions),
+        },
+        {
+            target: 'next-btn',
+            title: '④ 다음 단계로!',
+            body: <>주제가 정해졌으면 <b>다음</b>을 눌러요.</>,
+            action: true,
+            done: () => step >= 2,
+            praise: '2단계로 출발!',
+        },
+        {
+            target: 'intro-field',
+            title: '⑤ 서론: 문제 상황과 내 주장',
+            body: (
+                <>
+                    왜 이 글을 쓰게 됐는지, 내 주장이 무엇인지 적어요. <b>{MIN_LEN}자</b>가 넘으면 막대가 초록색이 돼요.
+                </>
+            ),
+            done: () => introLen >= MIN_LEN,
+            praise: '서론 완성!',
+            skipIf: () => step >= 3,
+        },
+        {
+            target: 'body-0',
+            title: '⑥ 본론: 근거와 출처',
+            body: (
+                <>
+                    "첫째, ~ 때문입니다"처럼 까닭을 쓰고, 아래 칸에 <b>어디서 알았는지</b>(책, 기사, 설문, 내 경험) 적어요.
+                </>
+            ),
+            done: () => !!body[0]?.reason.trim() && !!body[0]?.source.trim(),
+            praise: '근거와 출처를 모두 썼어요!',
+            skipIf: () => step >= 3,
+        },
+        {
+            target: 'add-reason',
+            skipIfMissing: true,
+            title: '근거가 많을수록 튼튼해요',
+            body: <><b>근거 추가하기</b>로 둘째, 셋째 근거를 더 쓸 수 있어요.</>,
+            skipIf: () => step >= 3,
+        },
+        {
+            target: 'conclusion-field',
+            title: '⑦ 결론: 정리하고 한 번 더 강조',
+            body: '"그러므로 우리는 ~해야 합니다"처럼 주장을 다시 말하며 마무리해요.',
+            done: () => conclLen >= MIN_LEN,
+            praise: '결론 완성!',
+            skipIf: () => step >= 3,
+        },
+        {
+            target: 'fairy-btn',
+            title: '막히면 글쓰기 요정에게!',
+            body: '이 버튼을 누르면 AI 요정에게 물어볼 수 있어요. 요정은 대신 써 주지 않고, 스스로 생각하도록 도와줘요.',
+            skipIf: () => step >= 3,
+        },
+        {
+            target: 'next-btn',
+            title: '⑧ 다 썼으면 다음!',
+            body: <>서론·결론 {MIN_LEN}자 이상, 모든 근거에 출처가 있어야 넘어갈 수 있어요.</>,
+            action: true,
+            allowOutside: true,
+            done: () => step >= 3,
+            praise: '마지막 단계예요!',
+        },
+        {
+            target: 'final-text',
+            title: '⑨ 소리 내어 읽으며 다듬기',
+            body: '서론·본론·결론이 한 글로 합쳐졌어요. 어색한 문장이나 틀린 글자를 여기서 고쳐요.',
+        },
+        {
+            target: 'submit-btn',
+            title: '⑩ 글 올리기로 완성!',
+            body: (
+                <>
+                    누르면 친구들이 읽을 수 있어요. 받은 <b>수정 코드</b>는 꼭 적어 두세요. 이제 혼자서도 할 수 있어요!
+                </>
+            ),
+        },
+    ];
+    const stageStart = { 1: 0, 2: 5, 3: 11 } as Record<number, number>;
+    const tour = useTour('writing', { autoStart: !isEditMode, replayIndex: () => stageStart[step] ?? 0 });
+
     return (
         <div ref={topRef} className="mx-auto max-w-3xl scroll-mt-20 px-4 pb-32 pt-6 sm:px-6">
             {/* 상단 */}
@@ -276,8 +396,9 @@ export const WritingWizard: React.FC<{
                                 onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && goTo(2)}
                                 placeholder="예: 초등학생도 스마트폰 사용 시간을 스스로 정해야 한다"
                                 className="h-13 text-base"
+                                data-tour="topic-input"
                             />
-                            <Button variant="sun" size="lg" loading={refining} onClick={handleRefine} icon={<Sparkles className="size-5" />} className="shrink-0">
+                            <Button variant="sun" size="lg" loading={refining} onClick={handleRefine} icon={<Sparkles className="size-5" />} className="shrink-0" data-tour="ai-refine">
                                 AI에게 다듬기
                             </Button>
                         </div>
@@ -285,7 +406,7 @@ export const WritingWizard: React.FC<{
                         {refining && <p className="mt-4 text-sm text-ink-500">글쓰기 요정이 더 좋은 주장을 찾고 있어요…</p>}
 
                         {suggestions && (
-                            <div className="mt-6 animate-rise">
+                            <div className="mt-6 animate-rise" data-tour="suggestions">
                                 <p className="mb-2 text-sm font-semibold text-ink-700">마음에 드는 주제를 눌러서 고를 수 있어요</p>
                                 <div className="space-y-2">
                                     {[suggestions.refined, ...suggestions.others].filter(Boolean).map((s, i) => {
@@ -324,7 +445,7 @@ export const WritingWizard: React.FC<{
                     <section className="space-y-8">
                         <StepHeading eyebrow="2단계" title="서론 · 본론 · 결론 쓰기" desc={<span className="font-semibold text-brand-700">“{topic}”</span>} />
 
-                        <div>
+                        <div data-tour="intro-field">
                             <PartLabel title="서론" hint="문제 상황과 나의 주장을 밝혀요" count={introLen} min={MIN_LEN} />
                             <Textarea
                                 aria-label="서론"
@@ -339,7 +460,7 @@ export const WritingWizard: React.FC<{
                             <PartLabel title="본론" hint="주장을 뒷받침하는 근거와 그 출처를 적어요" />
                             <div className="space-y-3">
                                 {body.map((part, i) => (
-                                    <div key={i} className="rounded-2xl bg-paper p-4 ring-1 ring-line/60">
+                                    <div key={i} className="rounded-2xl bg-paper p-4 ring-1 ring-line/60" data-tour={i === 0 ? 'body-0' : undefined}>
                                         <div className="mb-2 flex items-center justify-between">
                                             <Badge tone="brand">근거 {i + 1}</Badge>
                                             {body.length > 1 && (
@@ -369,13 +490,13 @@ export const WritingWizard: React.FC<{
                                 ))}
                             </div>
                             {body.length < 10 && (
-                                <Button variant="secondary" size="sm" icon={<Plus className="size-4" />} onClick={() => setBody([...body, { reason: '', source: '' }])} className="mt-3 border-dashed">
+                                <Button variant="secondary" size="sm" icon={<Plus className="size-4" />} onClick={() => setBody([...body, { reason: '', source: '' }])} className="mt-3 border-dashed" data-tour="add-reason">
                                     근거 추가하기
                                 </Button>
                             )}
                         </div>
 
-                        <div>
+                        <div data-tour="conclusion-field">
                             <PartLabel title="결론" hint="내용을 정리하고 주장을 한 번 더 강조해요" count={conclLen} min={MIN_LEN} />
                             <Textarea
                                 aria-label="결론"
@@ -395,7 +516,7 @@ export const WritingWizard: React.FC<{
                             <p className="text-lg font-bold text-ink-900">{topic}</p>
                             <p className="mt-1 text-sm text-ink-500">{studentLabel(student)}</p>
                         </div>
-                        <div className="mt-4">
+                        <div className="mt-4" data-tour="final-text">
                             <div className="mb-1.5 flex justify-end text-xs text-ink-500">{countChars(finalFullText)}자</div>
                             <Textarea aria-label="완성된 글" value={finalFullText} onChange={(e) => setFinalFullText(e.target.value)} className="min-h-96 text-base leading-8" />
                         </div>
@@ -434,11 +555,11 @@ export const WritingWizard: React.FC<{
                         </div>
                     )}
                     {step < 3 ? (
-                        <Button onClick={() => goTo(step + 1)} disabled={step === 1 && !valid[1]}>
+                        <Button onClick={() => goTo(step + 1)} disabled={step === 1 && !valid[1]} data-tour="next-btn">
                             다음 <ChevronRight className="size-4" />
                         </Button>
                     ) : (
-                        <Button variant="success" onClick={handleSubmit} loading={submitting} disabled={!valid[3]} icon={<Check className="size-4" />}>
+                        <Button variant="success" onClick={handleSubmit} loading={submitting} disabled={!valid[3]} icon={<Check className="size-4" />} data-tour="submit-btn">
                             {isEditMode ? '수정 완료' : '글 올리기'}
                         </Button>
                     )}
@@ -451,10 +572,12 @@ export const WritingWizard: React.FC<{
                 onClick={() => setChatOpen(true)}
                 className="no-print fixed bottom-20 right-4 z-30 flex items-center gap-2 rounded-full bg-ink-900 py-3 pl-3.5 pr-4 text-sm font-semibold text-white shadow-lift transition-transform hover:-translate-y-0.5 sm:right-6"
                 aria-label="AI 글쓰기 요정에게 물어보기"
+                data-tour="fairy-btn"
             >
                 <Bot className="size-5 text-sun-400" />
                 <span className="hidden sm:inline">글쓰기 요정</span>
             </button>
+            <Tour steps={tourSteps} running={tour.running} startAt={tour.startAt} onFinish={tour.finish} finishLabel="혼자 해 볼게요!" />
             <ChatPanel
                 open={chatOpen}
                 onClose={() => setChatOpen(false)}

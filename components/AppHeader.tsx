@@ -19,10 +19,11 @@ export const Logo: React.FC<{ className?: string; onClick?: () => void }> = ({ c
 export const AppHeader: React.FC<{
     student: Student | null;
     isAdmin: boolean;
+    teacherName?: string;
     onHome: () => void;
     onLogout: () => void;
     children?: React.ReactNode;
-}> = ({ student, isAdmin, onHome, onLogout, children }) => (
+}> = ({ student, isAdmin, teacherName, onHome, onLogout, children }) => (
     <header className="no-print sticky top-0 z-30 border-b border-line/70 bg-paper/85 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
             <Logo onClick={onHome} />
@@ -47,7 +48,7 @@ export const AppHeader: React.FC<{
                             <UserRound className="size-4 text-brand-600" aria-hidden />
                         )}
                         <span className="max-w-[9rem] truncate text-sm font-semibold text-ink-700">
-                            {isAdmin ? '선생님' : `${student!.grade}-${student!.classNumber} ${student!.name}`}
+                            {isAdmin ? teacherName || '선생님' : `${student!.grade}-${student!.classNumber} ${student!.name}`}
                         </span>
                         <button
                             type="button"

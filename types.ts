@@ -9,6 +9,7 @@ export interface Student {
   classNumber: string;
   studentId: string;
   name: string;
+  classCode?: string; // 선생님께 받은 학급 코드
 }
 
 export interface BodyPart {

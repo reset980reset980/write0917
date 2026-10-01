@@ -1,10 +1,34 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { config } from './config.js';
 import { pool, query } from './db.js';
-import { checkAdminCredentials, issueToken, isAdminRequest, requireAdmin } from './auth.js';
-import { isAiConfigured, getTopicSuggestions, getWritingAssistantResponse, offlineAnswer, AiUnavailableError } from './ai.js';
+import {
+  classTeacherFromRequest,
+  ensureAdminTeacher,
+  findTeacherForLogin,
+  getTeacherByClassCode,
+  hashPassword,
+  issueToken,
+  randomCode,
+  requireAdmin,
+  requireTeacher,
+  teacherFromRequest,
+} from './auth.js';
+import {
+  isAiConfigured,
+  getTopicSuggestions,
+  getWritingAssistantResponse,
+  offlineAnswer,
+  AiUnavailableError,
+  aiKeyForTeacher,
+  checkGeminiKey,
+  hasTeacherAiKey,
+  setTeacherAiKey,
+} from './ai.js';
 import { rateLimit } from './rateLimit.js';
 
 const app = express();
@@ -21,7 +45,7 @@ app.use(
       return callback(null, false);
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Edit-Code'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Edit-Code', 'X-Class-Code'],
     maxAge: 600,
   }),
 );
@@ -118,6 +142,34 @@ function newEditCode() {
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+function teacherOut(t) {
+  return {
+    id: t.id,
+    name: t.name,
+    loginId: t.login_id,
+    classCode: t.class_code,
+    isAdmin: t.is_admin,
+    aiConnected: hasTeacherAiKey(t.id),
+    sharedAi: Boolean(t.is_admin && isAiConfigured),
+  };
+}
+
+/** 학생 요청은 학급 코드가 꼭 있어야 함 */
+async function requireClass(req) {
+  const owner = await classTeacherFromRequest(req);
+  if (!owner) {
+    const err = new BadRequest('학급 코드가 필요해요. 선생님께 받은 학급 코드로 다시 들어와 주세요.');
+    err.status = 400;
+    throw err;
+  }
+  return owner;
+}
+
+/** 선생님이 이 글을 관리할 수 있는지 (자기 반 글 또는 관리자) */
+function canManage(teacher, essayRow) {
+  return Boolean(teacher && (teacher.is_admin || essayRow.teacher_id === teacher.id));
+}
+
 // ---------- 라우트 ----------
 
 app.get('/api/health', wrap(async (_req, res) => {
@@ -127,8 +179,9 @@ app.get('/api/health', wrap(async (_req, res) => {
 
 // 글 목록 (수정 코드는 로그인한 선생님에게만 보여줌)
 app.get('/api/essays', wrap(async (req, res) => {
-  const params = [];
-  const where = [];
+  const owner = await requireClass(req);
+  const params = [owner.id];
+  const where = ['teacher_id = $1'];
   if (req.query.grade) {
     params.push(int(req.query.grade, '학년', { min: 1, max: 6 }));
     where.push(`author_grade = $${params.length}`);
@@ -139,12 +192,14 @@ app.get('/api/essays', wrap(async (req, res) => {
   }
   const sql = `SELECT * FROM essays ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT 1000`;
   const { rows } = await query(sql, params);
-  const includeEditCode = isAdminRequest(req);
+  const me = await teacherFromRequest(req);
+  const includeEditCode = Boolean(me && me.id === owner.id);
   res.json(rows.map((r) => essayOut(r, { includeEditCode })));
 }));
 
 // 글 작성 → 수정 코드는 서버가 만들어서 한 번만 돌려줌
 app.post('/api/essays', writeLimiter, wrap(async (req, res) => {
+  const owner = await requireClass(req);
   const b = req.body || {};
   const s = b.student || {};
   const values = [
@@ -163,9 +218,9 @@ app.post('/api/essays', writeLimiter, wrap(async (req, res) => {
     try {
       const { rows } = await query(
         `INSERT INTO essays (title, introduction, body, conclusion, full_text,
-           author_grade, author_class, author_number, author_name, edit_code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [...values, newEditCode()],
+           author_grade, author_class, author_number, author_name, edit_code, teacher_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [...values, newEditCode(), owner.id],
       );
       return res.status(201).json(essayOut(rows[0], { includeEditCode: true }));
     } catch (err) {
@@ -221,8 +276,9 @@ app.post('/api/essays/:id/like', writeLimiter, wrap(async (req, res) => {
 app.delete('/api/essays/:id', writeLimiter, wrap(async (req, res) => {
   if (!isUuid(req.params.id)) throw new BadRequest('잘못된 글 번호입니다.');
   let result;
-  if (isAdminRequest(req)) {
-    result = await query('DELETE FROM essays WHERE id = $1', [req.params.id]);
+  const me = await teacherFromRequest(req);
+  if (me) {
+    result = await query('DELETE FROM essays WHERE id = $1 AND (teacher_id = $2 OR $3)', [req.params.id, me.id, me.is_admin]);
   } else {
     const code = String(req.get('x-edit-code') || '').trim().toLowerCase();
     if (!code) return res.status(401).json({ error: '글을 삭제할 권한이 없습니다.' });
@@ -247,7 +303,14 @@ app.post('/api/essays/:id/comments', writeLimiter, wrap(async (req, res) => {
   if (!isUuid(req.params.id)) throw new BadRequest('잘못된 글 번호입니다.');
   const b = req.body || {};
   const content = text(b.content, '댓글', { max: 2000 });
-  const isTeacher = isAdminRequest(req);
+  const me = await teacherFromRequest(req);
+  let isTeacher = false;
+  if (me) {
+    const { rows: er } = await query('SELECT teacher_id FROM essays WHERE id = $1', [req.params.id]);
+    if (!er[0]) return res.status(404).json({ error: '글을 찾을 수 없습니다.' });
+    if (!canManage(me, er[0])) return res.status(403).json({ error: '다른 반 글에는 선생님 댓글을 달 수 없어요.' });
+    isTeacher = true;
+  }
 
   let author;
   if (isTeacher) {
@@ -279,23 +342,124 @@ app.post('/api/essays/:id/comments', writeLimiter, wrap(async (req, res) => {
 }));
 
 // 댓글 삭제 (선생님만)
-app.delete('/api/comments/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/comments/:id', requireTeacher, wrap(async (req, res) => {
   if (!isUuid(req.params.id)) throw new BadRequest('잘못된 댓글 번호입니다.');
-  const result = await query('DELETE FROM comments WHERE id = $1', [req.params.id]);
+  const me = await teacherFromRequest(req);
+  const result = await query(
+    `DELETE FROM comments c USING essays e
+     WHERE c.id = $1 AND e.id = c.essay_id AND (e.teacher_id = $2 OR $3)`,
+    [req.params.id, me.id, me.is_admin],
+  );
   if (!result.rowCount) return res.status(404).json({ error: '댓글을 찾을 수 없습니다.' });
   res.json({ success: true });
 }));
 
-// 선생님 로그인
-app.post('/api/admin/login', loginLimiter, (req, res) => {
-  const { username, password } = req.body || {};
-  if (!checkAdminCredentials(username, password)) {
-    return res.status(401).json({ error: '아이디 또는 비밀번호가 올바르지 않습니다.' });
-  }
-  res.json(issueToken({ remember: req.body?.remember === true }));
-});
+// ---------- 선생님 계정 ----------
 
-app.get('/api/admin/me', requireAdmin, (_req, res) => res.json({ ok: true }));
+// 로그인 (이메일, 관리자는 admin)
+app.post('/api/admin/login', loginLimiter, wrap(async (req, res) => {
+  const { username, password } = req.body || {};
+  const t = await findTeacherForLogin(username, password);
+  if (!t) return res.status(401).json({ error: '아이디(이메일) 또는 비밀번호가 올바르지 않습니다.' });
+  res.json({ ...issueToken(t, { remember: req.body?.remember === true }), teacher: teacherOut(t) });
+}));
+
+app.get('/api/admin/me', requireTeacher, wrap(async (req, res) => {
+  res.json({ ok: true, teacher: teacherOut(await teacherFromRequest(req)) });
+}));
+
+// 가입 초대 코드 (관리자가 정함)
+async function getInviteCode() {
+  const { rows } = await query("SELECT value FROM settings WHERE key = 'invite_code'");
+  if (rows[0]?.value) return String(rows[0].value);
+  const code = process.env.INVITE_CODE || randomCode(8);
+  await query(
+    `INSERT INTO settings (key, value) VALUES ('invite_code', $1) ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(code)],
+  );
+  return code;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// 선생님 가입 (초대 코드 필요)
+app.post('/api/teachers/register', loginLimiter, wrap(async (req, res) => {
+  const b = req.body || {};
+  const name = text(b.name, '이름', { max: 30 }).trim();
+  const email = text(b.email, '이메일', { max: 120 }).trim().toLowerCase();
+  const password = text(b.password, '비밀번호', { max: 200 });
+  const invite = String(b.inviteCode || '').trim().toUpperCase();
+  if (!EMAIL_RE.test(email)) throw new BadRequest('이메일 형식이 올바르지 않아요.');
+  if (password.length < 8) throw new BadRequest('비밀번호는 8자 이상으로 해 주세요.');
+  if (typeof b.passwordConfirm === 'string' && b.passwordConfirm !== password) throw new BadRequest('비밀번호 확인이 일치하지 않아요.');
+  if (!invite || invite !== (await getInviteCode()).toUpperCase()) {
+    return res.status(403).json({ error: '초대 코드가 올바르지 않아요. 관리자 선생님께 받은 코드를 확인해 주세요.' });
+  }
+  const passwordHash = hashPassword(password);
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      const { rows } = await query(
+        `INSERT INTO teachers (login_id, name, password_hash, class_code) VALUES ($1,$2,$3,$4) RETURNING *`,
+        [email, name, passwordHash, randomCode()],
+      );
+      const t = rows[0];
+      return res.status(201).json({ ...issueToken(t, { remember: b.remember === true }), teacher: teacherOut(t) });
+    } catch (err) {
+      if (err.code !== '23505') throw err;
+      if (String(err.constraint || '').includes('login_id')) {
+        return res.status(409).json({ error: '이미 가입된 이메일이에요. 로그인해 주세요.' });
+      }
+      // 학급 코드가 겹치면 다시 만들기
+    }
+  }
+  throw new Error('학급 코드를 만들지 못했어요.');
+}));
+
+// 관리자: 초대 코드 보기/바꾸기
+app.get('/api/admin/invite-code', requireAdmin, wrap(async (_req, res) => {
+  res.json({ inviteCode: await getInviteCode() });
+}));
+
+app.put('/api/admin/invite-code', requireAdmin, wrap(async (req, res) => {
+  const code = String(req.body?.inviteCode || '').trim().toUpperCase() || randomCode(8);
+  if (!/^[A-Z0-9]{4,20}$/.test(code)) throw new BadRequest('초대 코드는 영문·숫자 4~20자로 해 주세요.');
+  await query(
+    `INSERT INTO settings (key, value, updated_at) VALUES ('invite_code', $1, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [JSON.stringify(code)],
+  );
+  res.json({ inviteCode: code });
+}));
+
+// 선생님 AI 키: 브라우저에 저장된 키를 받아 서버 메모리에만 보관 (DB 저장 안 함)
+app.post('/api/teacher/ai-key', requireTeacher, wrap(async (req, res) => {
+  const me = await teacherFromRequest(req);
+  const key = String(req.body?.key || '').trim();
+  if (!key) {
+    setTeacherAiKey(me.id, null);
+    return res.json({ ok: true, aiConnected: false });
+  }
+  if (key.length > 200 || /\s/.test(key)) throw new BadRequest('AI 키 형식이 올바르지 않아요.');
+  if (req.body?.verify !== false) {
+    const check = await checkGeminiKey(key);
+    if (!check.ok) return res.status(400).json({ error: `키를 확인하지 못했어요: ${check.message}` });
+  }
+  setTeacherAiKey(me.id, key);
+  res.json({ ok: true, aiConnected: true });
+}));
+
+app.delete('/api/teacher/ai-key', requireTeacher, wrap(async (req, res) => {
+  const me = await teacherFromRequest(req);
+  setTeacherAiKey(me.id, null);
+  res.json({ ok: true, aiConnected: false });
+}));
+
+// 학생: 학급 코드 확인
+app.get('/api/classes/:code', loginLimiter, wrap(async (req, res) => {
+  const t = await getTeacherByClassCode(req.params.code);
+  if (!t) return res.status(404).json({ error: '학급 코드를 찾을 수 없어요. 선생님께 받은 코드를 다시 확인해 주세요.' });
+  res.json({ ok: true, classCode: t.class_code, teacherName: t.name, aiReady: Boolean(aiKeyForTeacher(t)) });
+}));
 
 // ---------- 글쓰기 설정 (선생님이 바꿈) ----------
 
@@ -306,22 +470,24 @@ const DEFAULT_WRITING_SETTINGS = {
   showRemaining: true, // 학생에게 '몇 자 남았는지' 보여주기
 };
 
-async function readWritingSettings() {
-  const { rows } = await query("SELECT value FROM settings WHERE key = 'writing'");
+async function readWritingSettings(teacherId) {
+  const { rows } = await query('SELECT value FROM settings WHERE key = $1', [`writing:${teacherId}`]);
   return { ...DEFAULT_WRITING_SETTINGS, ...(rows[0]?.value || {}) };
 }
 
-app.get('/api/settings', wrap(async (_req, res) => {
-  res.json(await readWritingSettings());
+app.get('/api/settings', wrap(async (req, res) => {
+  const owner = await classTeacherFromRequest(req);
+  res.json(owner ? await readWritingSettings(owner.id) : DEFAULT_WRITING_SETTINGS);
 }));
 
-app.put('/api/settings', requireAdmin, wrap(async (req, res) => {
+app.put('/api/settings', requireTeacher, wrap(async (req, res) => {
+  const me = await teacherFromRequest(req);
   const b = req.body || {};
   const bool = (v, field) => {
     if (typeof v !== 'boolean') throw new BadRequest(`${field} 값이 올바르지 않습니다.`);
     return v;
   };
-  const current = await readWritingSettings();
+  const current = await readWritingSettings(me.id);
   const next = {
     requireMin: b.requireMin === undefined ? current.requireMin : bool(b.requireMin, '글자 수 조건'),
     minIntro: b.minIntro === undefined ? current.minIntro : int(b.minIntro, '서론 최소 글자 수', { min: 1, max: 3000 }),
@@ -329,9 +495,9 @@ app.put('/api/settings', requireAdmin, wrap(async (req, res) => {
     showRemaining: b.showRemaining === undefined ? current.showRemaining : bool(b.showRemaining, '남은 글자 수 표시'),
   };
   await query(
-    `INSERT INTO settings (key, value, updated_at) VALUES ('writing', $1, NOW())
+    `INSERT INTO settings (key, value, updated_at) VALUES ($2, $1, NOW())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-    [JSON.stringify(next)],
+    [JSON.stringify(next), `writing:${me.id}`],
   );
   res.json(next);
 }));
@@ -339,15 +505,21 @@ app.put('/api/settings', requireAdmin, wrap(async (req, res) => {
 // AI: 주제 다듬기
 app.post('/api/ai/topic-suggestions', aiLimiter, wrap(async (req, res) => {
   const topic = text(req.body?.topic, '주제', { max: 300 });
+  const owner = await classTeacherFromRequest(req);
   try {
-    res.json(await getTopicSuggestions(topic, req.body?.grade));
+    res.json(await getTopicSuggestions(topic, req.body?.grade, aiKeyForTeacher(owner)));
   } catch (err) {
     console.error('[ai] topic-suggestions', err.message);
-    const quota = err instanceof AiUnavailableError && err.reason === 'quota';
+    const reason = err instanceof AiUnavailableError ? err.reason : 'busy';
     res.json({
-      refinedTopic: quota
-        ? '오늘은 AI 요정이 주제를 다듬어 줄 수 있는 횟수를 다 썼어요. "~해야 한다", "~하자"로 끝나게 스스로 다듬어 보세요!'
-        : 'AI 요정이 지금 바빠요. 잠시 뒤 다시 눌러 주세요.',
+      refinedTopic:
+        reason === 'quota'
+          ? '오늘은 AI 요정이 주제를 다듬어 줄 수 있는 횟수를 다 썼어요. "~해야 한다", "~하자"로 끝나게 스스로 다듬어 보세요!'
+          : reason === 'nokey'
+          ? 'AI 요정이 아직 연결되지 않았어요. 선생님께 "AI 키 연결"을 부탁드려요. 그동안 "~해야 한다", "~하자"로 끝나게 스스로 다듬어 보세요!'
+          : reason === 'badkey'
+          ? 'AI 요정의 열쇠(AI 키)가 맞지 않아요. 선생님께 알려 주세요.'
+          : 'AI 요정이 지금 바빠요. 잠시 뒤 다시 눌러 주세요.',
       suggestions: [],
       unavailable: true,
     });
@@ -364,8 +536,9 @@ app.post('/api/ai/assistant', aiLimiter, wrap(async (req, res) => {
     body: text(c.body ?? '', '본론', { max: 20000, allowEmpty: true }),
     conclusion: text(c.conclusion ?? '', '결론', { max: 10000, allowEmpty: true }),
   };
+  const owner = await classTeacherFromRequest(req);
   try {
-    res.json({ answer: await getWritingAssistantResponse(context, question, req.body?.grade) });
+    res.json({ answer: await getWritingAssistantResponse(context, question, req.body?.grade, aiKeyForTeacher(owner)) });
   } catch (err) {
     console.error('[ai] assistant', err.message);
     const reason = err instanceof AiUnavailableError ? err.reason : 'busy';
@@ -384,6 +557,12 @@ app.use((err, _req, res, _next) => {
   console.error('[server]', err);
   res.status(500).json({ error: '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' });
 });
+
+// 시작할 때 DB 구조 확인 + 관리자 계정 준비
+const here = path.dirname(fileURLToPath(import.meta.url));
+await query(fs.readFileSync(path.join(here, '..', 'schema.sql'), 'utf8'));
+const adminTeacher = await ensureAdminTeacher();
+console.log(`✅ 관리자 반 학급 코드: ${adminTeacher.class_code}`);
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`✅ write0917 API 실행 중: http://${config.host}:${config.port} (AI: ${isAiConfigured ? '켜짐' : '꺼짐'})`);

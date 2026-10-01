@@ -2,19 +2,33 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_WRITING_SETTINGS, type Essay, type EssayData, type Student, type WritingSettings } from './types';
 import { FeedbackProvider, Spinner, useFeedback } from './components/ui';
 import { AppHeader } from './components/AppHeader';
-import { LandingView, StudentEntryView, TeacherLoginView } from './views/EntryViews';
+import { LandingView, StudentEntryView, TeacherLoginView, TeacherRegisterView } from './views/EntryViews';
+import { TeacherPanel } from './components/TeacherPanel';
 import { GalleryView } from './views/GalleryView';
 import { EssayDetailView } from './views/EssayDetailView';
 import { WritingWizard } from './views/WritingWizard';
 import { FindByCodeView, WritingSuccessView } from './views/SmallViews';
-import { addEssay, deleteEssay, getAllEssays, getWritingSettings, incrementLike, setAdminToken, updateEssay, verifyAdminToken } from './services/api';
-import { likedStore, myEssaysStore, sessionStore } from './storage';
+import {
+    addEssay,
+    connectAiKey,
+    deleteEssay,
+    getAllEssays,
+    getWritingSettings,
+    incrementLike,
+    setAdminToken,
+    setClassCode,
+    updateEssay,
+    verifyAdminToken,
+    type TeacherInfo,
+} from './services/api';
+import { aiKeyStore, likedStore, myEssaysStore, sessionStore } from './storage';
 
 type View =
     | { name: 'booting' }
     | { name: 'landing' }
     | { name: 'student-entry' }
     | { name: 'teacher-login' }
+    | { name: 'teacher-register' }
     | { name: 'gallery' }
     | { name: 'detail'; essay: Essay }
     | { name: 'write' }
@@ -26,7 +40,9 @@ const AppInner: React.FC = () => {
     const { toast, confirm } = useFeedback();
     const [view, setView] = useState<View>({ name: 'booting' });
     const [student, setStudent] = useState<Student | null>(null);
-    const [isAdmin, setIsAdmin] = useState(false);
+    // 로그인한 선생님 (isAdmin = 선생님 화면인지)
+    const [teacher, setTeacher] = useState<TeacherInfo | null>(null);
+    const isAdmin = Boolean(teacher);
 
     const [essays, setEssays] = useState<Essay[]>([]);
     const [loading, setLoading] = useState(false);
@@ -56,7 +72,7 @@ const AppInner: React.FC = () => {
                 toast('쓰던 글은 임시저장돼 있어요.', 'info');
             }
             if (['detail', 'write', 'edit', 'success', 'find'].includes(current)) setView({ name: 'gallery' });
-            else if (current === 'student-entry' || current === 'teacher-login') setView({ name: 'landing' });
+            else if (current === 'student-entry' || current === 'teacher-login' || current === 'teacher-register') setView({ name: 'landing' });
         };
         window.addEventListener('popstate', onPop);
         return () => window.removeEventListener('popstate', onPop);
@@ -85,28 +101,68 @@ const AppInner: React.FC = () => {
     }, [view.name]);
 
     // ---------- 새로고침해도 로그인 유지 ----------
+    // 브라우저에 저장된 AI 키를 서버에 다시 연결 (서버가 재시작돼도 선생님 화면을 열면 자동 복구)
+    const syncAiKey = useCallback(async (t: TeacherInfo) => {
+        const key = aiKeyStore.get();
+        if (!key) return t;
+        try {
+            const r = await connectAiKey(key, false);
+            const next = { ...t, aiConnected: r.aiConnected };
+            setTeacher(next);
+            return next;
+        } catch {
+            return t;
+        }
+    }, []);
+
+    const startTeacher = useCallback(
+        (t: TeacherInfo) => {
+            setTeacher(t);
+            setStudent(null);
+            setClassCode(null);
+            syncAiKey(t);
+        },
+        [syncAiKey],
+    );
+
     useEffect(() => {
         (async () => {
             const token = sessionStore.getAdminToken();
             if (token) {
                 setAdminToken(token);
-                if (await verifyAdminToken()) {
-                    setIsAdmin(true);
+                const t = await verifyAdminToken();
+                if (t) {
+                    startTeacher(t);
                     setView({ name: 'gallery' });
                     return;
                 }
                 setAdminToken(null);
                 sessionStore.setAdminToken(null);
             }
+            const params = new URLSearchParams(window.location.search);
             const s = sessionStore.getStudent();
-            if (s) {
+            if (s?.classCode && (!params.get('class') || params.get('class')!.toUpperCase() === s.classCode)) {
                 setStudent(s);
+                setClassCode(s.classCode);
                 setView({ name: 'gallery' });
                 return;
             }
-            setView({ name: 'landing' });
+            if (s) sessionStore.setStudent(null); // 학급 코드 없이 들어왔던 예전 기록은 다시 입장
+            // 링크로 들어온 경우 바로 해당 화면으로
+            if (params.get('class')) setView({ name: 'student-entry' });
+            else if (params.get('invite')) setView({ name: 'teacher-register' });
+            else setView({ name: 'landing' });
         })();
-    }, []);
+    }, [startTeacher]);
+
+    // 선생님 화면이 열려 있는 동안 10분마다 AI 키 연결 확인 (서버 재시작 대비)
+    useEffect(() => {
+        if (!teacher) return;
+        const id = setInterval(() => {
+            if (aiKeyStore.get()) connectAiKey(aiKeyStore.get()!, false).catch(() => {});
+        }, 10 * 60 * 1000);
+        return () => clearInterval(id);
+    }, [teacher?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const logout = async () => {
         if (view.name === 'write' || view.name === 'edit') {
@@ -114,8 +170,9 @@ const AppInner: React.FC = () => {
             if (!ok) return;
         }
         setStudent(null);
-        setIsAdmin(false);
+        setTeacher(null);
         setAdminToken(null);
+        setClassCode(null);
         sessionStore.setStudent(null);
         sessionStore.setAdminToken(null);
         setEssays([]);
@@ -244,6 +301,7 @@ const AppInner: React.FC = () => {
                     onBack={() => go({ name: 'landing' })}
                     onStart={(s) => {
                         setStudent(s);
+                        setClassCode(s.classCode || null);
                         sessionStore.setStudent(s);
                         go({ name: 'gallery' });
                     }}
@@ -253,12 +311,25 @@ const AppInner: React.FC = () => {
             return (
                 <TeacherLoginView
                     onBack={() => go({ name: 'landing' })}
-                    onLogin={(token, remember) => {
+                    onRegister={() => go({ name: 'teacher-register' })}
+                    onLogin={(token, remember, t) => {
                         sessionStore.setAdminToken(token, remember);
-                        setIsAdmin(true);
-                        setStudent(null);
+                        startTeacher(t);
                         go({ name: 'gallery' });
-                        toast('선생님으로 로그인했어요.');
+                        toast(`${t.name}, 반가워요!`);
+                    }}
+                />
+            );
+        case 'teacher-register':
+            return (
+                <TeacherRegisterView
+                    onBack={() => go({ name: 'landing' })}
+                    onLogin={() => go({ name: 'teacher-login' })}
+                    onRegistered={(token, remember, t) => {
+                        sessionStore.setAdminToken(token, remember);
+                        startTeacher(t);
+                        go({ name: 'gallery' });
+                        toast(`가입을 환영해요! 우리 반 학급 코드는 ${t.classCode} 예요.`);
                     }}
                 />
             );
@@ -268,6 +339,8 @@ const AppInner: React.FC = () => {
     switch (view.name) {
         case 'gallery':
             body = (
+                <>
+                {teacher && <TeacherPanel teacher={teacher} onChange={setTeacher} />}
                 <GalleryView
                     essays={essays}
                     loading={loading}
@@ -282,6 +355,7 @@ const AppInner: React.FC = () => {
                     onFindByCode={() => go({ name: 'find' })}
                     onDelete={(e) => handleDelete(e)}
                 />
+                </>
             );
             break;
         case 'detail':
@@ -343,7 +417,7 @@ const AppInner: React.FC = () => {
 
     return (
         <div className="min-h-dvh">
-            <AppHeader student={student} isAdmin={isAdmin} onHome={() => go({ name: 'gallery' })} onLogout={logout} />
+            <AppHeader student={student} isAdmin={isAdmin} teacherName={teacher?.name} onHome={() => go({ name: 'gallery' })} onLogout={logout} />
             <main>{body}</main>
         </div>
     );

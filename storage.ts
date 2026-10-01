@@ -47,6 +47,19 @@ export const sessionStore = {
     },
 };
 
+// ---------- 학급 코드 / 선생님 AI 키 (이 브라우저에만 저장) ----------
+
+export const classCodeStore = {
+    // 학생이 마지막으로 들어간 학급 코드 (다음에 입장할 때 미리 채워 줌)
+    getLast: () => read<string | null>(local, 'w917.lastClassCode', null),
+    setLast: (code: string | null) => write(local, 'w917.lastClassCode', code),
+};
+
+export const aiKeyStore = {
+    get: () => read<string | null>(local, 'w917.geminiKey', null),
+    set: (key: string | null) => write(local, 'w917.geminiKey', key),
+};
+
 // ---------- 좋아요 누른 글 ----------
 
 export const likedStore = {

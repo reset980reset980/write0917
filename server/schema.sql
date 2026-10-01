@@ -40,3 +40,18 @@ CREATE TABLE IF NOT EXISTS settings (
   value JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 선생님 계정 (선생님마다 학급 코드 1개, 학생은 이 코드로 들어옴)
+CREATE TABLE IF NOT EXISTS teachers (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  login_id TEXT NOT NULL UNIQUE,          -- 이메일(소문자) 또는 관리자 아이디
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  class_code TEXT NOT NULL UNIQUE,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 글은 선생님(학급)별로 나뉨
+ALTER TABLE essays ADD COLUMN IF NOT EXISTS teacher_id UUID REFERENCES teachers(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS essays_teacher_idx ON essays (teacher_id, created_at DESC);

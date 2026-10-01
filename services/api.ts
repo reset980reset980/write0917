@@ -8,6 +8,23 @@ export function setAdminToken(token: string | null) {
     adminToken = token;
 }
 
+// 학생이 들어온 학급 코드 (모든 요청에 함께 보냄)
+let classCode: string | null = null;
+
+export function setClassCode(code: string | null) {
+    classCode = code ? code.trim().toUpperCase() : null;
+}
+
+export interface TeacherInfo {
+    id: string;
+    name: string;
+    loginId: string;
+    classCode: string;
+    isAdmin: boolean;
+    aiConnected: boolean;
+    sharedAi: boolean;
+}
+
 class ApiError extends Error {
     status: number;
     constructor(message: string, status: number) {
@@ -20,6 +37,7 @@ async function request<T>(path: string, options: RequestInit & { json?: unknown;
     const headers: Record<string, string> = {};
     if (options.json !== undefined) headers['Content-Type'] = 'application/json';
     if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`;
+    if (classCode) headers['X-Class-Code'] = classCode;
     if (options.editCode) headers['X-Edit-Code'] = options.editCode;
 
     let res: Response;
@@ -117,30 +135,78 @@ export function saveWritingSettings(settings: WritingSettings): Promise<WritingS
     return request<WritingSettings>('/api/settings', { method: 'PUT', json: settings });
 }
 
-// 저장해 둔 선생님 토큰이 아직 유효한지 확인
-export async function verifyAdminToken(): Promise<boolean> {
-    if (!adminToken) return false;
+// 저장해 둔 선생님 토큰이 아직 유효한지 확인 (유효하면 선생님 정보)
+export async function verifyAdminToken(): Promise<TeacherInfo | null> {
+    if (!adminToken) return null;
     try {
-        await request('/api/admin/me');
-        return true;
+        const { teacher } = await request<{ teacher: TeacherInfo }>('/api/admin/me');
+        return teacher;
     } catch {
-        return false;
+        return null;
     }
 }
 
+export const getTeacherMe = verifyAdminToken;
+
 // 선생님 로그인 (성공하면 토큰 저장)
-export async function loginTeacher(username: string, password: string, remember = false): Promise<string | null> {
+export async function loginTeacher(
+    username: string,
+    password: string,
+    remember = false,
+): Promise<{ token: string; teacher: TeacherInfo } | null> {
     try {
-        const { token } = await request<{ token: string }>('/api/admin/login', {
+        const data = await request<{ token: string; teacher: TeacherInfo }>('/api/admin/login', {
             method: 'POST',
             json: { username, password, remember },
         });
-        setAdminToken(token);
-        return token;
+        setAdminToken(data.token);
+        return data;
     } catch (err) {
         if (err instanceof ApiError && err.status === 401) return null;
         throw err;
     }
+}
+
+// 선생님 가입 (초대 코드 필요)
+export async function registerTeacher(input: {
+    name: string;
+    email: string;
+    password: string;
+    passwordConfirm: string;
+    inviteCode: string;
+    remember: boolean;
+}): Promise<{ token: string; teacher: TeacherInfo }> {
+    const data = await request<{ token: string; teacher: TeacherInfo }>('/api/teachers/register', { method: 'POST', json: input });
+    setAdminToken(data.token);
+    return data;
+}
+
+// 학급 코드 확인 (학생 입장)
+export async function lookupClass(code: string): Promise<{ classCode: string; teacherName: string; aiReady: boolean } | null> {
+    try {
+        return await request(`/api/classes/${encodeURIComponent(code.trim().toUpperCase())}`);
+    } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+    }
+}
+
+// 선생님 AI 키: 브라우저에 저장된 키를 서버 메모리에 연결 (서버 DB에는 저장 안 됨)
+export function connectAiKey(key: string, verify = true): Promise<{ aiConnected: boolean }> {
+    return request('/api/teacher/ai-key', { method: 'POST', json: { key, verify } });
+}
+
+export function disconnectAiKey(): Promise<{ aiConnected: boolean }> {
+    return request('/api/teacher/ai-key', { method: 'DELETE' });
+}
+
+// 관리자: 가입 초대 코드
+export function getInviteCode(): Promise<{ inviteCode: string }> {
+    return request('/api/admin/invite-code');
+}
+
+export function saveInviteCode(inviteCode: string): Promise<{ inviteCode: string }> {
+    return request('/api/admin/invite-code', { method: 'PUT', json: { inviteCode } });
 }
 
 // ---------- AI (키는 서버에만 있습니다) ----------

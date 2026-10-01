@@ -1,15 +1,55 @@
+import crypto from 'node:crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from './config.js';
 
-const ai = config.geminiApiKey ? new GoogleGenAI({ apiKey: config.geminiApiKey }) : null;
+// 선생님마다 자기 Gemini 키를 씀 (서버 .env 키는 관리자 반에서만)
+const clients = new Map();
+function clientFor(apiKey) {
+  if (!clients.has(apiKey)) {
+    if (clients.size > 200) clients.delete(clients.keys().next().value);
+    clients.set(apiKey, new GoogleGenAI({ apiKey }));
+  }
+  return clients.get(apiKey);
+}
+const keyId = (apiKey) => crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 10);
 
-export const isAiConfigured = !!ai;
+export const isAiConfigured = !!config.geminiApiKey;
+
+// ---------- 선생님 AI 키 (DB에 저장하지 않고 서버 메모리에만 잠시 보관) ----------
+const teacherKeys = new Map(); // teacherId -> { key, at }
+
+export function setTeacherAiKey(teacherId, apiKey) {
+  if (apiKey) teacherKeys.set(teacherId, { key: apiKey, at: Date.now() });
+  else teacherKeys.delete(teacherId);
+}
+
+export function hasTeacherAiKey(teacherId) {
+  return teacherKeys.has(teacherId);
+}
+
+/** 이 반 학생들이 쓸 AI 키 */
+export function aiKeyForTeacher(teacher) {
+  if (!teacher) return '';
+  return teacherKeys.get(teacher.id)?.key || (teacher.is_admin ? config.geminiApiKey : '') || '';
+}
+
+/** 키가 진짜 동작하는지 가볍게 확인 (사용량을 거의 쓰지 않는 모델 목록 조회) */
+export async function checkGeminiKey(apiKey) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${encodeURIComponent(apiKey)}`);
+    if (res.ok) return { ok: true };
+    const data = await res.json().catch(() => null);
+    return { ok: false, message: data?.error?.message || `확인 실패 (${res.status})` };
+  } catch {
+    return { ok: false, message: 'Google 서버에 연결하지 못했어요.' };
+  }
+}
 
 /** 모든 모델이 한도 초과·혼잡일 때 */
 export class AiUnavailableError extends Error {
   constructor(reason) {
-    super(reason === 'quota' ? 'AI 사용량 한도 초과' : 'AI 일시 오류');
-    this.reason = reason; // 'quota' | 'busy'
+    super(reason === 'quota' ? 'AI 사용량 한도 초과' : reason === 'nokey' ? 'AI 키 없음' : 'AI 일시 오류');
+    this.reason = reason; // 'quota' | 'busy' | 'nokey' | 'badkey'
   }
 }
 
@@ -35,10 +75,14 @@ function errorStatus(err) {
   return { code, msg };
 }
 
-async function generate(params) {
+async function generate(params, apiKey) {
+  if (!apiKey) throw new AiUnavailableError('nokey');
+  const ai = clientFor(apiKey);
+  const kid = keyId(apiKey);
+  const cd = (m) => `${kid}:${m}`;
   let sawQuota = false;
   const now = Date.now();
-  const candidates = MODELS.filter((m) => (cooldownUntil.get(m) || 0) <= now);
+  const candidates = MODELS.filter((m) => (cooldownUntil.get(cd(m)) || 0) <= now);
   for (const model of candidates.length ? candidates : MODELS) {
     const thinking = thinkingFor(model);
     const attempt = (withThinking) =>
@@ -57,13 +101,16 @@ async function generate(params) {
       }
     } catch (err) {
       const { code, msg } = errorStatus(err);
+      if (/API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg) || code === 401 || code === 403) {
+        throw new AiUnavailableError('badkey');
+      }
       if (code === 429) {
         sawQuota = true;
-        cooldownUntil.set(model, Date.now() + (/PerDay/i.test(msg) ? COOLDOWN_QUOTA_MS : COOLDOWN_BUSY_MS));
+        cooldownUntil.set(cd(model), Date.now() + (/PerDay/i.test(msg) ? COOLDOWN_QUOTA_MS : COOLDOWN_BUSY_MS));
       } else if (code === 503 || code === 500) {
-        cooldownUntil.set(model, Date.now() + COOLDOWN_BUSY_MS);
+        cooldownUntil.set(cd(model), Date.now() + COOLDOWN_BUSY_MS);
       } else if (code === 404) {
-        cooldownUntil.set(model, Date.now() + 24 * 3600 * 1000); // 없어진 모델
+        cooldownUntil.set(cd(model), Date.now() + 24 * 3600 * 1000); // 없어진 모델
       } else if (code !== 400) {
         throw err;
       }
@@ -78,10 +125,7 @@ function gradeLabel(grade) {
   return Number.isInteger(g) && g >= 1 && g <= 6 ? `초등학교 ${g}학년` : '초등학교';
 }
 
-export async function getTopicSuggestions(originalTopic, grade) {
-  if (!ai) {
-    return { refinedTopic: 'AI 기능이 아직 설정되지 않았어요. 선생님께 알려주세요.', suggestions: [] };
-  }
+export async function getTopicSuggestions(originalTopic, grade, apiKey) {
 
   const prompt = `${gradeLabel(grade)} 학생이 주장하는 글(논설문)의 주제를 작성했습니다.
 모든 주제는 명확한 '주장'이 드러나도록 "~해야 한다", "~하자"와 같은 서술로 끝나야 합니다. 설명하는 듯한 제목은 피해주세요.
@@ -111,7 +155,7 @@ JSON 형식으로 응답해주세요.`;
         required: ['refinedTopic', 'suggestions'],
       },
     },
-  });
+  }, apiKey);
 
   const parsed = JSON.parse(response.text);
   return {
@@ -120,10 +164,7 @@ JSON 형식으로 응답해주세요.`;
   };
 }
 
-export async function getWritingAssistantResponse(context, question, grade) {
-  if (!ai) {
-    return 'AI 기능이 아직 설정되지 않았어요. 선생님께 알려주세요.';
-  }
+export async function getWritingAssistantResponse(context, question, grade, apiKey) {
 
   const systemInstruction = `당신은 '글쓰기 요정'입니다. 한국의 ${gradeLabel(grade)} 학생이 '주장하는 글'을 쓰는 것을 돕는, 친절하고 상냥한 AI 조수입니다.
 - 항상 학생을 격려하는 말투를 사용하고, 학생의 학년 수준에 맞는 이해하기 쉬운 한국어로 설명해주세요.
@@ -142,7 +183,7 @@ export async function getWritingAssistantResponse(context, question, grade) {
 
 위 상황과 질문을 바탕으로, '글쓰기 요정'으로서 학생에게 도움이 되는 답변을 해주세요.`;
 
-  const response = await generate({ contents: prompt, config: { systemInstruction } });
+  const response = await generate({ contents: prompt, config: { systemInstruction } }, apiKey);
   return response.text || '';
 }
 
@@ -157,6 +198,10 @@ export function offlineAnswer(reason, step) {
   const head =
     reason === 'quota'
       ? '지금은 글쓰기 요정이 오늘 할 수 있는 이야기를 다 해서 쉬고 있어요. 😴 (AI 사용량 한도) 내일 다시 불러 주세요.'
+      : reason === 'nokey'
+      ? '글쓰기 요정이 아직 깨어나지 않았어요. 선생님께 "AI 키 연결"을 부탁드려요.'
+      : reason === 'badkey'
+      ? '글쓰기 요정을 부르는 열쇠(AI 키)가 맞지 않아요. 선생님께 알려 주세요.'
       : '지금은 글쓰기 요정을 찾는 친구들이 너무 많아요. 잠시 뒤 다시 물어봐 주세요.';
   return `${head}\n\n대신 요정의 팁 하나!\n${OFFLINE_TIPS[step] || OFFLINE_TIPS[2]}`;
 }
